@@ -2,7 +2,7 @@ export async function predictPlantDisease(file) {
     const formData = new FormData();
     formData.append("file", file);
 
-    const response = await fetch("/api/v1/predict", {
+    const response = await fetch("/predict", {
         method: "POST",
         body: formData,
     });

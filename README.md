@@ -35,8 +35,8 @@ The system combines:
 
 ```bash
 cd backend
-python -m venv .venv
-source .venv/bin/activate
+source /home/tanav/miniconda3/etc/profile.d/conda.sh
+conda activate base
 pip install -r requirements.txt
 # For real TensorFlow inference support
 pip install tensorflow-cpu
@@ -73,11 +73,11 @@ The backend automatically attempts to load a Keras model from `MODEL_PATH`.
 model.save("plant_diseases.h5")
 ```
 
-2. Place it inside `backend/` (or set a custom path in `.env`).
-3. Set labels in `.env` according to model output order:
+1. Place it in the project root as `plant_diseases.h5` (or set a custom path in `.env`).
+1. Set labels in `.env` according to model output order:
 
 ```env
-MODEL_PATH=./plant_diseases.h5
+MODEL_PATH=../plant_diseases.h5
 CLASS_LABELS=Potato___Early_blight,Potato___healthy,Potato___Late_blight
 IMAGE_SIZE=224
 MAX_UPLOAD_SIZE_MB=8
