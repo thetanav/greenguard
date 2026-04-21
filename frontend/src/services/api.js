@@ -14,3 +14,11 @@ export async function predictPlantDisease(file) {
 
     return response.json();
 }
+
+export async function getHealthStatus() {
+    const response = await fetch("/health");
+    if (!response.ok) {
+        throw new Error("Backend unavailable");
+    }
+    return response.json();
+}
