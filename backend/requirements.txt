@@ -8,3 +8,4 @@ tensorflow
 sqlmodel
 pyjwt
 passlib[bcrypt]
+pytest

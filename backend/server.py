@@ -7,9 +7,9 @@ import numpy as np
 import jwt
 import passlib.hash
 import sqlmodel
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings
 from PIL import Image
@@ -124,7 +124,9 @@ def create_token(user_id: int) -> str:
 
 def verify_token(token: str) -> int | None:
     try:
-        payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+        payload = jwt.decode(
+            token, settings.jwt_secret, algorithms=[settings.jwt_algorithm]
+        )
         return int(payload.get("sub"))
     except jwt.PyJWTError:
         return None
@@ -186,7 +188,7 @@ def register(req: RegisterRequest):
 
         user = User(
             email=req.email,
-            password_hash=passlib.hash.hash_sha256_crypt(req.password),
+            password_hash=passlib.hash.sha256_crypt.hash(req.password),
             name=req.name or req.email.split("@")[0],
         )
         session.add(user)
@@ -203,10 +205,12 @@ def register(req: RegisterRequest):
 
 
 @app.post("/api/auth/login", response_model=AuthResponse)
-def login(form: OAuth2PasswordRequestForm):
+def login(body: RegisterRequest):
     with sqlmodel.Session(engine) as session:
-        user = session.query(User).where(User.email == form.username).first()
-        if not user or not passlib.hash.verify_sha256_crypt(form.password, user.password_hash):
+        user = session.query(User).where(User.email == body.email).first()
+        if not user or not passlib.hash.sha256_crypt.verify(
+            body.password, user.password_hash
+        ):
             raise HTTPException(status_code=401, detail="Invalid credentials")
 
         token = create_token(user.id)
@@ -219,7 +223,7 @@ def login(form: OAuth2PasswordRequestForm):
 
 
 @app.get("/api/auth/me", response_model=UserResponse)
-def get_me(token: str = oauth2_scheme):
+def get_me(token: str = Depends(oauth2_scheme)):
     user = get_current_user(token)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -227,16 +231,14 @@ def get_me(token: str = oauth2_scheme):
 
 
 @app.post("/api/auth/logout")
-def logout(token: str = oauth2_scheme):
+def logout(token: str = Depends(oauth2_scheme)):
     return {"message": "Logged out"}
 
 
-@app.post("/predict")
-async def predict(file: UploadFile = File(...), token: str | None = None):
-    if not file.content_type or not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="Please upload a valid image file")
-
-    file_bytes = await file.read()
+def process_image(file_bytes: bytes) -> np.ndarray:
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded image is empty.")
+    
     max_size = settings.max_upload_size_mb * 1024 * 1024
     if len(file_bytes) > max_size:
         raise HTTPException(
@@ -244,29 +246,29 @@ async def predict(file: UploadFile = File(...), token: str | None = None):
             detail=f"Image is too large. Max allowed size is {settings.max_upload_size_mb}MB.",
         )
 
-    if not file_bytes:
-        raise HTTPException(status_code=400, detail="Uploaded image is empty.")
-
     try:
         image = Image.open(BytesIO(file_bytes)).convert("RGB")
         image = image.resize((224, 224))
         arr = np.array(image, dtype=np.float32) / 255.0
         arr = np.expand_dims(arr, axis=0)
     except Exception as exc:
-        raise HTTPException(status_code=400, detail="Unable to read image. Please upload a valid image file.") from exc
+        raise HTTPException(
+            status_code=400,
+            detail="Unable to read image. Please upload a valid image file.",
+        ) from exc
+    return arr
 
-    user_id = None
-    if token:
-        user_id = verify_token(token)
 
+def get_prediction(arr: np.ndarray) -> dict:
     if model is None:
-        idx = sum(file_bytes) % len(labels)
-        result = {
+        idx = sum(arr.tobytes()) % len(labels)
+        return {
             "label": labels[idx],
             "confidence": 0.75,
             "details": [{"label": labels[idx], "score": 0.75}],
             "recommendations": treatment_map.get(labels[idx], []),
             "model_ready": False,
+            "image_index": 0,
         }
     else:
         preds = model.predict(arr, verbose=0)
@@ -274,32 +276,54 @@ async def predict(file: UploadFile = File(...), token: str | None = None):
         top_idx = int(np.argmax(probs))
         top_label = labels[top_idx] if top_idx < len(labels) else f"Class_{top_idx}"
 
-        result = {
+        return {
             "label": top_label,
             "confidence": round(float(probs[top_idx]), 4),
-            "details": [{"label": top_label, "score": round(float(probs[top_idx]), 4}],
+            "details": [{"label": top_label, "score": round(float(probs[top_idx]), 4)}],
             "recommendations": treatment_map.get(top_label, []),
             "model_ready": True,
+            "image_index": 0,
         }
+
+
+@app.post("/predict")
+async def predict(files: list[UploadFile] = File(...), token: str | None = None):
+    if not files:
+        raise HTTPException(status_code=400, detail="Please upload at least one image")
+
+    for file in files:
+        if not file.content_type or not file.content_type.startswith("image/"):
+            raise HTTPException(status_code=400, detail=f"Invalid file type for {file.filename}")
+
+    results = []
+    user_id = verify_token(token) if token else None
+
+    for idx, file in enumerate(files):
+        file_bytes = await file.read()
+        arr = process_image(file_bytes)
+        result = get_prediction(arr)
+        result["image_index"] = idx
+        results.append(result)
 
     if user_id:
         with sqlmodel.Session(engine) as session:
-            pred = Prediction(
-                user_id=user_id,
-                label=result["label"],
-                confidence=result["confidence"],
-                details=str(result["details"]),
-                recommendations=str(result["recommendations"]),
-                image_name=file.filename or "unknown",
-            )
-            session.add(pred)
+            for result in results:
+                pred = Prediction(
+                    user_id=user_id,
+                    label=result["label"],
+                    confidence=result["confidence"],
+                    details=str(result["details"]),
+                    recommendations=str(result["recommendations"]),
+                    image_name=files[result["image_index"]].filename or "unknown",
+                )
+                session.add(pred)
             session.commit()
 
-    return result
+    return results
 
 
 @app.get("/api/history", response_model=list[PredictionResponse])
-def get_history(token: str = oauth2_scheme):
+def get_history(token: str = Depends(oauth2_scheme)):
     user = get_current_user(token)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -328,7 +352,7 @@ def get_history(token: str = oauth2_scheme):
 
 
 @app.delete("/api/history/{pred_id}")
-def delete_history(pred_id: int, token: str = oauth2_scheme):
+def delete_history(pred_id: int, token: str = Depends(oauth2_scheme)):
     user = get_current_user(token)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
