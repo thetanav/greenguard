@@ -141,19 +141,7 @@ function QueueFlowCard({
           </div>
 
           <div className="flex-1">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <h4 className="font-['Playfair_Display'] text-lg leading-none text-[#edf9f1]">
-                  {item.file.name}
-                </h4>
-                <p className="text-[11px] text-[#7e9a8a] mt-1">
-                  {Math.max(1, Math.round(item.file.size / 1024))} KB
-                </p>
-              </div>
-              <StatusPill status={item.status} />
-            </div>
-
-            <div className="mt-3 grid grid-cols-1 md:grid-cols-[112px_minmax(0,1fr)] gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-[112px_minmax(0,1fr)] gap-3">
               <img
                 src={item.previewUrl}
                 alt={item.file.name}
@@ -195,6 +183,18 @@ function QueueFlowCard({
                   </p>
                 )}
               </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2 mt-3">
+              <div>
+                <h4 className="text-sm leading-none text-[#edf9f1] truncate w-fit">
+                  {item.file.name}
+                </h4>
+                <p className="text-[11px] text-[#7e9a8a] mt-1">
+                  {Math.max(1, Math.round(item.file.size / 1024))} KB
+                </p>
+              </div>
+              <StatusPill status={item.status} />
             </div>
 
             {item.result &&
@@ -296,13 +296,7 @@ function UploadDropzone({
 
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
-          <p className="font-['Playfair_Display'] text-2xl text-[#edf9f1]">
-            Drop many leaf images
-          </p>
-          <p className="text-sm text-[#8ea99a] mt-1">
-            GreenGuard will process each image one by one and show a live flow
-            of predictions.
-          </p>
+          <p className="text-2xl text-[#edf9f1]">Drop as many leaf images</p>
         </div>
         <button
           type="button"
@@ -630,36 +624,27 @@ export default function App() {
       <div className="mx-auto max-w-[1280px] grid grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)] gap-4 md:gap-5">
         <aside className="h-fit lg:sticky lg:top-4 p-4 md:p-5 rounded-2xl border border-[rgba(72,220,130,0.18)] bg-[radial-gradient(circle_at_top,rgba(72,220,130,0.14),rgba(17,25,22,0.92)_45%)] shadow-[0_20px_40px_rgba(0,0,0,0.25)]">
           <div className="flex items-center gap-3 pb-4 border-b border-[rgba(72,220,130,0.16)]">
-            <div className="w-10 h-10 border-2 border-[#48dc82] rounded-xl flex items-center justify-center relative overflow-hidden">
+            <div className="w-8 h-8 border-3 border-[#48dc82] rounded-lg flex items-center justify-center relative overflow-hidden">
               <div className="w-2 h-2 bg-[#48dc82] rounded-full shadow-[0_0_12px_rgba(72,220,130,0.6)] animate-pulse" />
             </div>
-            <div>
-              <h1 className="font-['Playfair_Display'] text-2xl leading-none">
+            <div className="flex items-center justify-between w-full">
+              <h1 className="text-2xl leading-none text-[#48dc82]">
                 GreenGuard
               </h1>
-              <p className="text-[11px] text-[#8ba896] mt-1 uppercase tracking-[0.12em]">
-                Flow Diagnose
-              </p>
-            </div>
-          </div>
-
-          <div className="mt-4 flex items-center justify-between rounded-xl border border-[rgba(72,220,130,0.12)] bg-[#0d1512] p-3">
-            <span className="text-xs text-[#8ba896] uppercase tracking-[0.1em]">
-              Backend
-            </span>
-            <div className="flex items-center gap-2">
-              <div
-                className={`w-2 h-2 rounded-full ${
-                  backendStatus === "online"
-                    ? "bg-[#48dc82] shadow-[0_0_8px_rgba(72,220,130,0.6)]"
-                    : backendStatus === "offline"
-                      ? "bg-[#f87171] shadow-[0_0_8px_rgba(248,113,113,0.45)]"
-                      : "bg-[#fbbf24]"
-                } ${backendStatus === "online" ? "animate-pulse" : ""}`}
-              />
-              <span className="text-xs uppercase tracking-[0.1em] text-[#edf9f1]">
-                {backendStatus}
-              </span>
+              <div className="flex items-center gap-2">
+                <div
+                  className={`w-2 h-2 rounded-full ${
+                    backendStatus === "online"
+                      ? "bg-[#48dc82] shadow-[0_0_8px_rgba(72,220,130,0.6)]"
+                      : backendStatus === "offline"
+                        ? "bg-[#f87171] shadow-[0_0_8px_rgba(248,113,113,0.45)]"
+                        : "bg-[#fbbf24]"
+                  } ${backendStatus === "online" ? "animate-pulse" : ""}`}
+                />
+                <span className="text-xs uppercase tracking-[0.1em] text-[#edf9f1]">
+                  {backendStatus}
+                </span>
+              </div>
             </div>
           </div>
 
@@ -847,7 +832,7 @@ export default function App() {
           )}
 
           <footer className="pt-5 mt-5 border-t border-[rgba(72,220,130,0.15)] text-center text-xs text-[#4d665a]">
-            GreenGuard v0.2 Flow UI ·{" "}
+            GreenGuard · {new Date().getFullYear()} ·{" "}
             <a
               href="https://github.com/thetanav/greenguard"
               target="_blank"

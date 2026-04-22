@@ -58,6 +58,10 @@ body::before {
   animation: scanMove 8s linear infinite;
 }
 
+button {
+  cursor: pointer;
+}
+
 @keyframes scanMove {
   from {
     background-position: 0 0;
