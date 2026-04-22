@@ -1,4 +1,3 @@
-import os
 from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
@@ -20,7 +19,7 @@ class Settings(BaseSettings):
     app_version: str = "0.1.0"
     frontend_origin: str = "http://localhost:5173"
 
-    class_labels: str = "Potato___Early_blight,Potato___healthy,Potato___Late_blight"
+    class_labels: str = "Potato___Early_blight,Potato___Late_blight,Potato___healthy"
     image_size: int = 224
     max_upload_size_mb: int = 8
     jwt_secret: str = "your-super-secret-key-change-in-production"
@@ -98,7 +97,7 @@ def load_model():
 
 
 model = load_model()
-labels = [l.strip() for l in settings.class_labels.split(",") if l.strip()]
+labels = [label.strip() for label in settings.class_labels.split(",") if label.strip()]
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
@@ -239,7 +238,7 @@ def logout(token: str = Depends(oauth2_scheme)):
 def process_image(file_bytes: bytes) -> np.ndarray:
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Uploaded image is empty.")
-    
+
     max_size = settings.max_upload_size_mb * 1024 * 1024
     if len(file_bytes) > max_size:
         raise HTTPException(
@@ -249,8 +248,10 @@ def process_image(file_bytes: bytes) -> np.ndarray:
 
     try:
         image = Image.open(BytesIO(file_bytes)).convert("RGB")
-        image = image.resize((224, 224))
-        arr = np.array(image, dtype=np.float32) / 255.0
+        image = image.resize((settings.image_size, settings.image_size))
+        # The exported EfficientNet model already includes internal rescaling.
+        # Keep pixel range in [0, 255] here to avoid double normalization.
+        arr = np.array(image, dtype=np.float32)
         arr = np.expand_dims(arr, axis=0)
     except Exception as exc:
         raise HTTPException(
@@ -261,30 +262,27 @@ def process_image(file_bytes: bytes) -> np.ndarray:
 
 
 def get_prediction(arr: np.ndarray) -> dict:
-    if model is None:
-        idx = sum(arr.tobytes()) % len(labels)
-        return {
-            "label": labels[idx],
-            "confidence": 0.75,
-            "details": [{"label": labels[idx], "score": 0.75}],
-            "recommendations": treatment_map.get(labels[idx], []),
-            "model_ready": False,
-            "image_index": 0,
+    preds = model.predict(arr, verbose=0)
+    probs = np.asarray(preds[0], dtype=np.float32)
+    top_idx = int(np.argmax(probs))
+    top_label = labels[top_idx] if top_idx < len(labels) else f"Class_{top_idx}"
+    ranked_indices = np.argsort(probs)[::-1]
+    details = [
+        {
+            "label": labels[idx] if idx < len(labels) else f"Class_{int(idx)}",
+            "score": round(float(probs[idx]), 4),
         }
-    else:
-        preds = model.predict(arr, verbose=0)
-        probs = np.asarray(preds[0], dtype=np.float32)
-        top_idx = int(np.argmax(probs))
-        top_label = labels[top_idx] if top_idx < len(labels) else f"Class_{top_idx}"
+        for idx in ranked_indices
+    ]
 
-        return {
-            "label": top_label,
-            "confidence": round(float(probs[top_idx]), 4),
-            "details": [{"label": top_label, "score": round(float(probs[top_idx]), 4)}],
-            "recommendations": treatment_map.get(top_label, []),
-            "model_ready": True,
-            "image_index": 0,
-        }
+    return {
+        "label": top_label,
+        "confidence": round(float(probs[top_idx]), 4),
+        "details": details,
+        "recommendations": treatment_map.get(top_label, []),
+        "model_ready": True,
+        "image_index": 0,
+    }
 
 
 @app.post("/predict")
@@ -294,7 +292,9 @@ async def predict(files: list[UploadFile] = File(...), token: str | None = None)
 
     for file in files:
         if not file.content_type or not file.content_type.startswith("image/"):
-            raise HTTPException(status_code=400, detail=f"Invalid file type for {file.filename}")
+            raise HTTPException(
+                status_code=400, detail=f"Invalid file type for {file.filename}"
+            )
 
     results = []
     user_id = verify_token(token) if token else None

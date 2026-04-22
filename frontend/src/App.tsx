@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   getUser,
   login,
@@ -18,18 +18,43 @@ interface SelectedFile {
   previewUrl: string;
 }
 
-function formatLabel(raw: string): string {
-  return raw?.replace(/___/g, " — ").replace(/_/g, " ") || "-";
+type QueueStatus = "queued" | "processing" | "done" | "failed";
+
+interface QueueItem extends SelectedFile {
+  id: string;
+  status: QueueStatus;
+  result?: PredictionResult;
+  error?: string;
 }
 
-function buildChatGptUrl(result: PredictionResult, fileName: string | undefined): string {
+function formatLabel(raw: string): string {
+  return raw?.replace(/___/g, " - ").replace(/_/g, " ") || "-";
+}
+
+function buildChatGptUrl(
+  result: PredictionResult,
+  fileName: string | undefined,
+): string {
   const label = formatLabel(result?.label || "Unknown disease");
   const confidence = result?.confidence
     ? `${(result.confidence * 100).toFixed(1)}%`
     : "unknown";
-  const recommendations = Array.isArray(result?.recommendations) && result.recommendations.length > 0
-    ? result.recommendations.map((item, index) => `${index + 1}. ${item}`).join("\n")
-    : "No recommendations were provided by the app.";
+  const recommendations =
+    Array.isArray(result?.recommendations) && result.recommendations.length > 0
+      ? result.recommendations
+          .map((item, index) => `${index + 1}. ${item}`)
+          .join("\n")
+      : "No recommendations were provided by the app.";
+
+  const details =
+    Array.isArray(result?.details) && result.details.length > 0
+      ? result.details
+          .map(
+            (item) =>
+              `- ${formatLabel(item.label || "Unknown")}: ${(item.score * 100).toFixed(1)}%`,
+          )
+          .join("\n")
+      : "- No extra detail available.";
 
   const prompt = `I used GreenGuard to analyze a plant leaf image${fileName ? ` (${fileName})` : ""}.
 
@@ -39,13 +64,7 @@ Prediction summary:
 - Model mode: ${result?.model_ready ? "ML model" : "demo fallback"}
 
 Details:
-${
-  Array.isArray(result?.details) && result.details.length > 0
-    ? result.details.map(
-        (item) => `- ${formatLabel(item.label || "Unknown")}: ${(item.score * 100).toFixed(1)}%`
-      ).join("\n")
-    : "- No extra detail available."
-}
+${details}
 
 Current recommendations from GreenGuard:
 ${recommendations}
@@ -55,203 +74,249 @@ Give me a practical, step-by-step treatment plan, likely causes, urgency level, 
   return `https://chatgpt.com/?q=${encodeURIComponent(prompt)}`;
 }
 
-function DiagnosisCard({
-  result,
-  expanded,
-  onExpand,
+function makeQueueId(): string {
+  if (
+    typeof crypto !== "undefined" &&
+    typeof crypto.randomUUID === "function"
+  ) {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function StatusPill({ status }: { status: QueueStatus }) {
+  const map = {
+    queued:
+      "bg-[rgba(148,163,184,0.12)] text-slate-300 border-[rgba(148,163,184,0.35)]",
+    processing:
+      "bg-[rgba(251,191,36,0.12)] text-amber-300 border-[rgba(251,191,36,0.35)]",
+    done: "bg-[rgba(72,220,130,0.12)] text-[#48dc82] border-[rgba(72,220,130,0.35)]",
+    failed:
+      "bg-[rgba(248,113,113,0.12)] text-[#f87171] border-[rgba(248,113,113,0.35)]",
+  };
+
+  return (
+    <span
+      className={`px-2 py-1 text-[10px] uppercase tracking-[0.12em] border rounded-full ${map[status]}`}>
+      {status}
+    </span>
+  );
+}
+
+function QueueFlowCard({
+  item,
+  index,
+  active,
+  running,
+  onRemove,
+  onRetry,
   onOpenChatGpt,
-  imageUrl,
 }: {
-  result: PredictionResult;
-  expanded: boolean;
-  onExpand: () => void;
-  onOpenChatGpt: () => void;
-  imageUrl?: string;
+  item: QueueItem;
+  index: number;
+  active: boolean;
+  running: boolean;
+  onRemove: (id: string) => void;
+  onRetry: (item: QueueItem) => void;
+  onOpenChatGpt: (item: QueueItem) => void;
 }) {
-  const confidencePct = (result.confidence * 100).toFixed(1);
+  const confidencePct = item.result
+    ? (item.result.confidence * 100).toFixed(1)
+    : null;
 
   return (
     <div
-      className={`bg-[#111916] border ${expanded ? "border-[#48dc82]" : "border-[rgba(72,220,130,0.15)]"} rounded-lg overflow-hidden transition-all cursor-pointer`}
-      onClick={onExpand}
-    >
-      <div className="p-4 flex items-start justify-between">
-        <div className="flex-1">
-          <div className="flex items-center gap-2 mb-1">
-            <span className="font-['Playfair_Display'] text-lg font-semibold text-[#e8f5ec]">
-              {formatLabel(result.label)}
-            </span>
-            <span
-              className={`px-2 py-0.5 rounded text-xs font-medium ${
-                result.model_ready
-                  ? "bg-[rgba(72,220,130,0.12)] text-[#48dc82]"
-                  : "bg-[rgba(251,191,36,0.15)] text-[#fbbf24]"
-              }`}
-            >
-              {result.model_ready ? "ML" : "Demo"}
-            </span>
+      className={`relative overflow-hidden rounded-2xl border transition-all duration-250 ${
+        active
+          ? "border-[#48dc82] bg-[linear-gradient(145deg,rgba(72,220,130,0.14),rgba(11,21,18,0.9))] shadow-[0_12px_40px_rgba(72,220,130,0.18)]"
+          : "border-[rgba(72,220,130,0.16)] bg-[#111916]"
+      }`}>
+      <div className="p-4 md:p-5">
+        <div className="flex items-start gap-4">
+          <div className="flex flex-col items-center mt-1">
+            <div className="w-7 h-7 rounded-full bg-[#0c1310] border border-[rgba(72,220,130,0.35)] text-[11px] font-semibold flex items-center justify-center text-[#48dc82]">
+              {index + 1}
+            </div>
+            <div className="w-px h-full mt-2 bg-[linear-gradient(180deg,rgba(72,220,130,0.42),transparent)]" />
+          </div>
+
+          <div className="flex-1">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h4 className="font-['Playfair_Display'] text-lg leading-none text-[#edf9f1]">
+                  {item.file.name}
+                </h4>
+                <p className="text-[11px] text-[#7e9a8a] mt-1">
+                  {Math.max(1, Math.round(item.file.size / 1024))} KB
+                </p>
+              </div>
+              <StatusPill status={item.status} />
+            </div>
+
+            <div className="mt-3 grid grid-cols-1 md:grid-cols-[112px_minmax(0,1fr)] gap-3">
+              <img
+                src={item.previewUrl}
+                alt={item.file.name}
+                className="w-full h-24 object-cover rounded-xl border border-[rgba(72,220,130,0.16)]"
+              />
+
+              <div className="rounded-xl border border-[rgba(72,220,130,0.12)] bg-[#0d1512] p-3">
+                {item.result ? (
+                  <>
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-sm text-[#8ea99a]">Prediction</p>
+                      {confidencePct && (
+                        <span className="text-base font-bold text-[#48dc82]">
+                          {confidencePct}%
+                        </span>
+                      )}
+                    </div>
+                    <p className="font-semibold text-[#edf9f1] mt-0.5">
+                      {formatLabel(item.result.label)}
+                    </p>
+                    <div className="mt-2 h-1.5 bg-[#1a2622] rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-gradient-to-r from-[#48dc82] to-[#2dd4bf] rounded-full transition-all duration-500"
+                        style={{
+                          width: `${Math.max(5, parseFloat(confidencePct || "5"))}%`,
+                        }}
+                      />
+                    </div>
+                  </>
+                ) : item.status === "failed" ? (
+                  <p className="text-sm text-[#fca5a5]">
+                    {item.error || "Prediction failed"}
+                  </p>
+                ) : (
+                  <p className="text-sm text-[#8ea99a]">
+                    {item.status === "processing"
+                      ? "Analyzing this image now..."
+                      : "Waiting in queue"}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {item.result &&
+              Array.isArray(item.result.recommendations) &&
+              item.result.recommendations.length > 0 && (
+                <div className="mt-3 rounded-xl border border-[rgba(72,220,130,0.12)] bg-[#0d1512] p-3">
+                  <p className="text-[11px] uppercase tracking-[0.12em] text-[#8ea99a] mb-2">
+                    Quick treatment
+                  </p>
+                  <ul className="space-y-1">
+                    {item.result.recommendations.slice(0, 3).map((rec, idx) => (
+                      <li key={idx} className="text-sm text-[#edf9f1]">
+                        {idx + 1}. {rec}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+            <div className="mt-3 flex flex-wrap gap-2">
+              {item.result && (
+                <button
+                  type="button"
+                  className="px-3 py-2 text-xs font-semibold uppercase tracking-[0.1em] rounded-md border border-[rgba(72,220,130,0.3)] text-[#48dc82] hover:bg-[rgba(72,220,130,0.12)] transition-colors"
+                  onClick={() => onOpenChatGpt(item)}>
+                  Open in ChatGPT
+                </button>
+              )}
+              {item.status === "failed" && (
+                <button
+                  type="button"
+                  className="px-3 py-2 text-xs font-semibold uppercase tracking-[0.1em] rounded-md border border-[rgba(251,191,36,0.35)] text-amber-300 hover:bg-[rgba(251,191,36,0.12)] transition-colors"
+                  disabled={running}
+                  onClick={() => onRetry(item)}>
+                  Retry
+                </button>
+              )}
+              <button
+                type="button"
+                className="px-3 py-2 text-xs font-semibold uppercase tracking-[0.1em] rounded-md border border-[rgba(248,113,113,0.3)] text-[#fca5a5] hover:bg-[rgba(248,113,113,0.12)] transition-colors disabled:opacity-40"
+                disabled={running}
+                onClick={() => onRemove(item.id)}>
+                Remove
+              </button>
+            </div>
           </div>
         </div>
-        <span className="text-xl font-bold text-[#48dc82]">{confidencePct}%</span>
       </div>
-
-      <div className="mx-4 h-1.5 bg-[#1a2622] rounded-full overflow-hidden">
-        <div
-          className="h-full bg-gradient-to-r from-[#48dc82] to-[#2dd4bf] rounded-full transition-all duration-500"
-          style={{ width: `${Math.max(5, parseFloat(confidencePct))}%` }}
-        />
-      </div>
-
-      {expanded && (
-        <div className="p-4 border-t border-[rgba(72,220,130,0.15)]">
-          {imageUrl && (
-            <div className="mb-4">
-              <img
-                src={imageUrl}
-                alt="Analyzed specimen"
-                className="w-full max-h-48 object-cover rounded-md border border-[rgba(72,220,130,0.15)]"
-              />
-            </div>
-          )}
-
-          {Array.isArray(result.details) && result.details.length > 0 && (
-            <div className="mb-4">
-              <h4 className="text-xs font-medium uppercase tracking-wider text-[#8ba896] mb-2">
-                All Predictions
-              </h4>
-              <ul className="space-y-1">
-                {result.details.map((item) => (
-                  <li
-                    key={item.label}
-                    className="flex justify-between text-sm text-[#8ba896]"
-                  >
-                    <span>{formatLabel(item.label)}</span>
-                    <span>{(item.score * 100).toFixed(1)}%</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {Array.isArray(result.recommendations) && result.recommendations.length > 0 && (
-            <div className="mb-4">
-              <h4 className="text-xs font-medium uppercase tracking-wider text-[#8ba896] mb-2">
-                Treatment Protocol
-              </h4>
-              <ul className="space-y-1">
-                {result.recommendations.map((item, i) => (
-                  <li key={i} className="text-sm text-[#8ba896] list-disc list-inside">
-                    {item}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          <button
-            type="button"
-            className="w-full py-3 bg-gradient-to-r from-[rgba(72,220,130,0.14)] to-[rgba(45,212,191,0.12)] border border-[rgba(72,220,130,0.32)] rounded-md text-[#e8f5ec] text-sm font-bold uppercase tracking-wider transition-all hover:border-[rgba(72,220,130,0.6)]"
-            onClick={(e) => {
-              e.stopPropagation();
-              onOpenChatGpt();
-            }}
-          >
-            Open in ChatGPT
-          </button>
-        </div>
-      )}
     </div>
   );
 }
 
-function FileUploadSlot({
-  index,
-  file,
-  previewUrl,
-  onRemove,
-  onFileChange,
-  dragOver,
-  setDragOver,
+function UploadDropzone({
+  disabled,
+  onFiles,
 }: {
-  index: number;
-  file: SelectedFile | null;
-  onRemove: () => void;
-  onFileChange: (file: File) => void;
-  dragOver: boolean;
-  setDragOver: (v: boolean) => void;
+  disabled: boolean;
+  onFiles: (files: File[]) => void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = useState(false);
 
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragOver(false);
-    const droppedFile = e.dataTransfer.files?.[0];
-    if (droppedFile && droppedFile.type.startsWith("image/")) {
-      onFileChange(droppedFile);
+  const addFromInput = (files: FileList | null) => {
+    if (!files) return;
+    const imageFiles = Array.from(files).filter((file) =>
+      file.type.startsWith("image/"),
+    );
+    if (imageFiles.length > 0) {
+      onFiles(imageFiles);
     }
   };
 
   return (
-    <div className="flex flex-col items-center">
-      <span className="text-xs uppercase tracking-wider text-[#8ba896] mb-2">
-        Image {index + 1}
-      </span>
-      {!file ? (
-        <div
-          className={`w-full h-32 border-2 border-dashed rounded-lg flex flex-col items-center justify-center cursor-pointer transition-all ${
-            dragOver
-              ? "border-[#48dc82] bg-[rgba(72,220,130,0.05)]"
-              : "border-[rgba(72,220,130,0.15)] bg-[#1a2622] hover:border-[rgba(72,220,130,0.4)]"
-          }`}
-          onDragOver={(e) => {
-            e.preventDefault();
-            setDragOver(true);
-          }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={handleDrop}
-          onClick={() => inputRef.current?.click()}
-        >
-          <input
-            ref={inputRef}
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) onFileChange(f);
-            }}
-          />
-          <div className="text-2xl text-[#4d665a] mb-1">+</div>
-          <small className="text-xs text-[#4d665a]">Drop or click</small>
+    <div
+      className={`rounded-2xl border-2 border-dashed p-6 md:p-8 transition-all ${
+        dragging
+          ? "border-[#48dc82] bg-[rgba(72,220,130,0.08)]"
+          : "border-[rgba(72,220,130,0.22)] bg-[rgba(10,15,13,0.7)] hover:border-[rgba(72,220,130,0.45)]"
+      } ${disabled ? "opacity-70" : ""}`}
+      onDragOver={(e) => {
+        e.preventDefault();
+        if (!disabled) setDragging(true);
+      }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragging(false);
+        if (!disabled) addFromInput(e.dataTransfer.files);
+      }}>
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        className="hidden"
+        onChange={(e) => addFromInput(e.target.files)}
+        disabled={disabled}
+      />
+
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div>
+          <p className="font-['Playfair_Display'] text-2xl text-[#edf9f1]">
+            Drop many leaf images
+          </p>
+          <p className="text-sm text-[#8ea99a] mt-1">
+            GreenGuard will process each image one by one and show a live flow
+            of predictions.
+          </p>
         </div>
-      ) : (
-        <div className="relative w-full">
-          <img
-            src={file.previewUrl}
-            alt={`Upload ${index + 1}`}
-            className="w-full h-32 object-cover rounded-lg border border-[rgba(72,220,130,0.15)]"
-          />
-          <button
-            type="button"
-            className="absolute top-2 right-2 w-6 h-6 bg-[#f87171] text-white rounded-full text-sm font-bold flex items-center justify-center"
-            onClick={onRemove}
-          >
-            ×
-          </button>
-          <div className="mt-1 text-xs text-[#8ba896] truncate">{file.file.name}</div>
-        </div>
-      )}
+        <button
+          type="button"
+          disabled={disabled}
+          className="px-4 py-3 rounded-xl bg-[#48dc82] text-[#0a0f0d] text-xs font-bold uppercase tracking-[0.12em] hover:brightness-95 transition disabled:opacity-60"
+          onClick={() => inputRef.current?.click()}>
+          Add Images
+        </button>
+      </div>
     </div>
   );
 }
 
-function AuthForm({
-  onAuth,
-  error,
-}: {
-  onAuth: () => void;
-  error: string;
-}) {
+function AuthForm({ onAuth, error }: { onAuth: () => void; error: string }) {
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -279,7 +344,9 @@ function AuthForm({
 
   return (
     <div className="p-7 bg-[#111916] border border-[rgba(72,220,130,0.15)] rounded-xl">
-      <h2 className="font-['Playfair_Display'] text-xl mb-1">{isLogin ? "Sign In" : "Create Account"}</h2>
+      <h2 className="font-['Playfair_Display'] text-xl mb-1">
+        {isLogin ? "Sign In" : "Create Account"}
+      </h2>
       <p className="text-sm text-[#8ba896] mb-5">
         {isLogin
           ? "Sign in to save your diagnosis history"
@@ -321,8 +388,7 @@ function AuthForm({
         <button
           type="submit"
           disabled={loading}
-          className="w-full py-3 bg-[#48dc82] text-[#0a0f0d] rounded-md font-semibold uppercase tracking-wider text-sm hover:opacity-90 disabled:opacity-50"
-        >
+          className="w-full py-3 bg-[#48dc82] text-[#0a0f0d] rounded-md font-semibold uppercase tracking-wider text-sm hover:opacity-90 disabled:opacity-50">
           {loading ? "..." : isLogin ? "Sign In" : "Register"}
         </button>
       </form>
@@ -332,8 +398,7 @@ function AuthForm({
         <button
           type="button"
           onClick={() => setIsLogin(!isLogin)}
-          className="text-[#48dc82] underline"
-        >
+          className="text-[#48dc82] underline">
           {isLogin ? "Register" : "Sign In"}
         </button>
       </p>
@@ -349,9 +414,11 @@ function HistoryItemComponent({
   onDelete: (id: number) => void;
 }) {
   return (
-    <div className="flex items-center gap-3 p-3 bg-[#1a2622] rounded-md">
-      <div className="flex-1">
-        <div className="text-sm font-medium">{formatLabel(item.label)}</div>
+    <div className="flex items-center gap-3 p-3 bg-[#1a2622] rounded-md border border-[rgba(72,220,130,0.12)]">
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-medium truncate">
+          {formatLabel(item.label)}
+        </div>
         <div className="text-xs text-[#4d665a]">
           {new Date(item.created_at).toLocaleDateString()}
         </div>
@@ -362,9 +429,8 @@ function HistoryItemComponent({
       <button
         type="button"
         className="w-6 h-6 bg-transparent border border-[rgba(72,220,130,0.15)] rounded text-[#4d665a] text-lg hover:border-[#f87171] hover:text-[#f87171]"
-        onClick={() => onDelete(item.id)}
-      >
-        ×
+        onClick={() => onDelete(item.id)}>
+        x
       </button>
     </div>
   );
@@ -372,15 +438,16 @@ function HistoryItemComponent({
 
 export default function App() {
   const [user, setUser] = useState<User | null>(getUser());
-  const [selectedFiles, setSelectedFiles] = useState<(SelectedFile | null)[]>([null, null, null]);
-  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [results, setResults] = useState<PredictionResult[]>([]);
-  const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
+  const [queue, setQueue] = useState<QueueItem[]>([]);
+  const [isBatchRunning, setIsBatchRunning] = useState(false);
+  const [activeQueueId, setActiveQueueId] = useState<string | null>(null);
   const [error, setError] = useState("");
-  const [backendStatus, setBackendStatus] = useState<"checking" | "online" | "offline">("checking");
+  const [backendStatus, setBackendStatus] = useState<
+    "checking" | "online" | "offline"
+  >("checking");
   const [view, setView] = useState<"upload" | "auth" | "history">("upload");
   const [history, setHistory] = useState<HistoryItem[]>([]);
+  const previewsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     let mounted = true;
@@ -389,7 +456,8 @@ export default function App() {
     const checkBackend = async () => {
       try {
         const data = await getHealthStatus();
-        if (mounted) setBackendStatus(data.status === "ok" ? "online" : "offline");
+        if (mounted)
+          setBackendStatus(data.status === "ok" ? "online" : "offline");
       } catch {
         if (mounted) setBackendStatus("offline");
       }
@@ -405,41 +473,125 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    selectedFiles.forEach((f) => {
-      if (f) URL.revokeObjectURL(f.previewUrl);
-    });
+    return () => {
+      previewsRef.current.forEach((url) => URL.revokeObjectURL(url));
+      previewsRef.current.clear();
+    };
   }, []);
 
   useEffect(() => {
-    if (user && view === "history") loadHistory();
+    if (user && view === "history") {
+      void loadHistory();
+    }
   }, [user, view]);
 
-  const handleFile = (index: number, file: File | null) => {
-    const newFiles = [...selectedFiles];
-    if (newFiles[index]) URL.revokeObjectURL(newFiles[index]!.previewUrl);
-    newFiles[index] = file ? { file, previewUrl: URL.createObjectURL(file) } : null;
-    setSelectedFiles(newFiles);
-    setResults([]);
+  const revokePreview = (url: string) => {
+    if (previewsRef.current.has(url)) {
+      URL.revokeObjectURL(url);
+      previewsRef.current.delete(url);
+    }
+  };
+
+  const addFiles = (files: File[]) => {
+    const next = files.map((file) => {
+      const previewUrl = URL.createObjectURL(file);
+      previewsRef.current.add(previewUrl);
+      return {
+        id: makeQueueId(),
+        file,
+        previewUrl,
+        status: "queued" as QueueStatus,
+      };
+    });
+
+    setQueue((prev) => [...prev, ...next]);
     setError("");
   };
 
-  const onSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const files = selectedFiles.filter((f): f is SelectedFile => f !== null);
-    if (files.length === 0) {
-      setError("Select at least one image first");
+  const removeQueueItem = (id: string) => {
+    setQueue((prev) => {
+      const target = prev.find((item) => item.id === id);
+      if (target) revokePreview(target.previewUrl);
+      return prev.filter((item) => item.id !== id);
+    });
+    if (activeQueueId === id) setActiveQueueId(null);
+  };
+
+  const clearQueue = () => {
+    queue.forEach((item) => revokePreview(item.previewUrl));
+    setQueue([]);
+    setActiveQueueId(null);
+    setError("");
+  };
+
+  const updateQueueItem = (id: string, updates: Partial<QueueItem>) => {
+    setQueue((prev) =>
+      prev.map((item) => (item.id === id ? { ...item, ...updates } : item)),
+    );
+  };
+
+  const runSinglePrediction = async (item: QueueItem) => {
+    if (isBatchRunning) return;
+    setError("");
+    setActiveQueueId(item.id);
+    updateQueueItem(item.id, { status: "processing", error: undefined });
+    try {
+      const [prediction] = await predict([item.file]);
+      updateQueueItem(item.id, {
+        status: "done",
+        result: prediction,
+        error: undefined,
+      });
+      if (user) {
+        await loadHistory();
+      }
+    } catch (err) {
+      updateQueueItem(item.id, {
+        status: "failed",
+        error: err instanceof Error ? err.message : "Prediction failed",
+      });
+    } finally {
+      setActiveQueueId(null);
+    }
+  };
+
+  const runBatchPredictions = async () => {
+    const queueSnapshot = queue;
+    if (queueSnapshot.length === 0) {
+      setError("Add at least one image first");
       return;
     }
-    setIsLoading(true);
+
+    setIsBatchRunning(true);
     setError("");
-    try {
-      const preds = await predict(files.map((f) => f.file));
-      setResults(preds);
-      if (user) loadHistory();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Prediction failed");
-    } finally {
-      setIsLoading(false);
+
+    for (const item of queueSnapshot) {
+      setActiveQueueId(item.id);
+      updateQueueItem(item.id, {
+        status: "processing",
+        error: undefined,
+        result: undefined,
+      });
+
+      try {
+        const [prediction] = await predict([item.file]);
+        updateQueueItem(item.id, {
+          status: "done",
+          result: prediction,
+          error: undefined,
+        });
+      } catch (err) {
+        updateQueueItem(item.id, {
+          status: "failed",
+          error: err instanceof Error ? err.message : "Prediction failed",
+        });
+      }
+    }
+
+    setActiveQueueId(null);
+    setIsBatchRunning(false);
+    if (user) {
+      await loadHistory();
     }
   };
 
@@ -447,217 +599,265 @@ export default function App() {
     try {
       const hist = await getHistory();
       setHistory(hist);
-    } catch (e) {
+    } catch {
       console.error("Failed to load history");
     }
   };
 
-  const handleDelete = async (id: number) => {
+  const handleDeleteHistory = async (id: number) => {
     await deleteHistoryItem(id);
-    loadHistory();
+    await loadHistory();
   };
 
-  const handleOpenChatGpt = (resultIndex: number) => {
-    const result = results[resultIndex];
-    const file = selectedFiles[resultIndex];
-    if (!result) return;
-    const chatGptUrl = buildChatGptUrl(result, file?.file.name);
+  const handleOpenChatGpt = (item: QueueItem) => {
+    if (!item.result) return;
+    const chatGptUrl = buildChatGptUrl(item.result, item.file.name);
     window.open(chatGptUrl, "_blank", "noopener,noreferrer");
   };
 
   const handleLogout = () => {
     logout();
     setUser(null);
-    setResults([]);
     setHistory([]);
     setView("upload");
   };
 
+  const completed = queue.filter((item) => item.status === "done").length;
+  const failed = queue.filter((item) => item.status === "failed").length;
+
   return (
-    <main className="max-w-[900px] mx-auto p-4 pb-12 flex flex-col gap-5">
-      <header className="flex justify-between items-center pb-4 border-b border-[rgba(72,220,130,0.15)]">
-        <div className="flex items-center gap-2">
-          <div className="w-9 h-9 border-2 border-[#48dc82] rounded-lg flex items-center justify-center relative overflow-hidden">
-            <div className="w-2 h-2 bg-[#48dc82] rounded-full shadow-[0_0_12px_rgba(72,220,130,0.6)] animate-pulse" />
-          </div>
-          <h1 className="font-['Playfair_Display'] text-xl font-bold tracking-tight">
-            Green<span className="text-[#48dc82]">Guard</span>
-          </h1>
-        </div>
-        <div className="flex items-center gap-3">
-          {user ? (
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-[#8ba896]">{user.name}</span>
-              <button
-                type="button"
-                className="w-8 h-8 bg-transparent border border-[rgba(72,220,130,0.15)] rounded-md text-[#8ba896] hover:border-[#48dc82] hover:text-[#48dc82]"
-                onClick={handleLogout}
-              >
-                ⎋
-              </button>
+    <main className="min-h-screen px-3 py-4 md:px-6 md:py-6">
+      <div className="mx-auto max-w-[1280px] grid grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)] gap-4 md:gap-5">
+        <aside className="h-fit lg:sticky lg:top-4 p-4 md:p-5 rounded-2xl border border-[rgba(72,220,130,0.18)] bg-[radial-gradient(circle_at_top,rgba(72,220,130,0.14),rgba(17,25,22,0.92)_45%)] shadow-[0_20px_40px_rgba(0,0,0,0.25)]">
+          <div className="flex items-center gap-3 pb-4 border-b border-[rgba(72,220,130,0.16)]">
+            <div className="w-10 h-10 border-2 border-[#48dc82] rounded-xl flex items-center justify-center relative overflow-hidden">
+              <div className="w-2 h-2 bg-[#48dc82] rounded-full shadow-[0_0_12px_rgba(72,220,130,0.6)] animate-pulse" />
             </div>
-          ) : (
-            <button
-              type="button"
-              className="px-4 py-2 bg-[#48dc82] text-[#0a0f0d] border-none rounded-md text-xs font-semibold uppercase tracking-wider cursor-pointer hover:-translate-y-0.5"
-              onClick={() => setView("auth")}
-            >
-              Sign In
-            </button>
-          )}
-          <div
-            className={`w-2 h-2 rounded-full ${
-              backendStatus === "online"
-                ? "bg-[#48dc82] shadow-[0_0_8px_rgba(72,220,130,0.6)]"
-                : backendStatus === "offline"
-                ? "bg-[#f87171] shadow-[0_0_8px_rgba(248,113,113,0.5)]"
-                : "bg-[#fbbf24] shadow-[0_0_8px_rgba(251,191,36,0.5)]"
-            } ${backendStatus === "online" ? "animate-pulse" : ""}`}
-          />
-        </div>
-      </header>
+            <div>
+              <h1 className="font-['Playfair_Display'] text-2xl leading-none">
+                GreenGuard
+              </h1>
+              <p className="text-[11px] text-[#8ba896] mt-1 uppercase tracking-[0.12em]">
+                Flow Diagnose
+              </p>
+            </div>
+          </div>
 
-      {user && (
-        <nav className="flex gap-1 p-1 bg-[#111916] rounded-lg">
-          <button
-            type="button"
-            className={`flex-1 py-2 px-4 rounded-md text-xs font-medium uppercase tracking-wider transition-all ${
-              view === "upload"
-                ? "bg-[rgba(72,220,130,0.12)] text-[#48dc82]"
-                : "text-[#8ba896] hover:text-[#e8f5ec]"
-            }`}
-            onClick={() => setView("upload")}
-          >
-            Diagnose
-          </button>
-          <button
-            type="button"
-            className={`flex-1 py-2 px-4 rounded-md text-xs font-medium uppercase tracking-wider transition-all ${
-              view === "history"
-                ? "bg-[rgba(72,220,130,0.12)] text-[#48dc82]"
-                : "text-[#8ba896] hover:text-[#e8f5ec]"
-            }`}
-            onClick={() => setView("history")}
-          >
-            History
-          </button>
-        </nav>
-      )}
-
-      {view === "auth" && !user && (
-        <section className="flex flex-col gap-4 animate-fade-in">
-          <AuthForm onAuth={() => setView("upload")} error={error} />
-        </section>
-      )}
-
-      {view === "upload" && (
-        <section className="flex flex-col gap-4 animate-fade-in">
-          <div className="p-5 bg-[#111916] border border-[rgba(72,220,130,0.15)] rounded-xl">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-xs font-medium uppercase tracking-wider text-[#8ba896]">
-                Specimen Input
-              </h3>
-              <span className="flex items-center gap-1 px-2 py-1 bg-[rgba(72,220,130,0.12)] rounded text-xs text-[#48dc82]">
-                ◆ Ready
+          <div className="mt-4 flex items-center justify-between rounded-xl border border-[rgba(72,220,130,0.12)] bg-[#0d1512] p-3">
+            <span className="text-xs text-[#8ba896] uppercase tracking-[0.1em]">
+              Backend
+            </span>
+            <div className="flex items-center gap-2">
+              <div
+                className={`w-2 h-2 rounded-full ${
+                  backendStatus === "online"
+                    ? "bg-[#48dc82] shadow-[0_0_8px_rgba(72,220,130,0.6)]"
+                    : backendStatus === "offline"
+                      ? "bg-[#f87171] shadow-[0_0_8px_rgba(248,113,113,0.45)]"
+                      : "bg-[#fbbf24]"
+                } ${backendStatus === "online" ? "animate-pulse" : ""}`}
+              />
+              <span className="text-xs uppercase tracking-[0.1em] text-[#edf9f1]">
+                {backendStatus}
               </span>
             </div>
+          </div>
 
-            <div className="grid grid-cols-3 gap-4">
-              {[0, 1, 2].map((index) => (
-                <FileUploadSlot
-                  key={index}
-                  index={index}
-                  file={selectedFiles[index]}
-                  onRemove={() => handleFile(index, null)}
-                  onFileChange={(file) => handleFile(index, file)}
-                  dragOver={dragOverIndex === index}
-                  setDragOver={(v) => setDragOverIndex(v ? index : null)}
-                />
-              ))}
-            </div>
-
-            <div className="flex gap-3 mt-4">
+          <nav className="mt-4 space-y-2">
+            <button
+              type="button"
+              className={`w-full text-left px-3 py-2 rounded-lg text-xs uppercase tracking-[0.12em] transition ${
+                view === "upload"
+                  ? "bg-[rgba(72,220,130,0.14)] text-[#48dc82]"
+                  : "text-[#8ba896] hover:text-[#edf9f1] hover:bg-[rgba(72,220,130,0.07)]"
+              }`}
+              onClick={() => setView("upload")}>
+              Diagnose Flow
+            </button>
+            {user && (
               <button
                 type="button"
-                onClick={onSubmit}
-                disabled={isLoading || selectedFiles.every((f) => f === null)}
-                className="flex-1 py-3 bg-[#48dc82] text-[#0a0f0d] border-none rounded-md font-semibold uppercase tracking-wider text-sm transition-all hover:-translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {isLoading ? "Analyzing..." : "Run Diagnosis"}
+                className={`w-full text-left px-3 py-2 rounded-lg text-xs uppercase tracking-[0.12em] transition ${
+                  view === "history"
+                    ? "bg-[rgba(72,220,130,0.14)] text-[#48dc82]"
+                    : "text-[#8ba896] hover:text-[#edf9f1] hover:bg-[rgba(72,220,130,0.07)]"
+                }`}
+                onClick={() => setView("history")}>
+                History
               </button>
+            )}
+            {!user && (
               <button
                 type="button"
-                onClick={() => selectedFiles.forEach((_, i) => handleFile(i, null))}
-                disabled={isLoading || selectedFiles.every((f) => f === null)}
-                className="py-3 px-5 bg-transparent text-[#8ba896] border border-[rgba(72,220,130,0.15)] rounded-md text-sm hover:border-[#8ba896] disabled:opacity-50"
-              >
-                Clear
+                className={`w-full text-left px-3 py-2 rounded-lg text-xs uppercase tracking-[0.12em] transition ${
+                  view === "auth"
+                    ? "bg-[rgba(72,220,130,0.14)] text-[#48dc82]"
+                    : "text-[#8ba896] hover:text-[#edf9f1] hover:bg-[rgba(72,220,130,0.07)]"
+                }`}
+                onClick={() => setView("auth")}>
+                Sign In
               </button>
-            </div>
+            )}
+          </nav>
 
-            {error && (
-              <p className="mt-3 p-3 bg-[rgba(248,113,113,0.1)] border border-[rgba(248,113,113,0.3)] rounded-md text-sm text-[#f87171]">
-                {error}
+          <div className="mt-4 grid grid-cols-3 gap-2">
+            <div className="p-2 rounded-lg bg-[#0d1512] border border-[rgba(72,220,130,0.12)]">
+              <p className="text-[10px] uppercase tracking-[0.12em] text-[#7e9a8a]">
+                Queued
+              </p>
+              <p className="font-bold text-[#edf9f1] mt-1">{queue.length}</p>
+            </div>
+            <div className="p-2 rounded-lg bg-[#0d1512] border border-[rgba(72,220,130,0.12)]">
+              <p className="text-[10px] uppercase tracking-[0.12em] text-[#7e9a8a]">
+                Done
+              </p>
+              <p className="font-bold text-[#48dc82] mt-1">{completed}</p>
+            </div>
+            <div className="p-2 rounded-lg bg-[#0d1512] border border-[rgba(72,220,130,0.12)]">
+              <p className="text-[10px] uppercase tracking-[0.12em] text-[#7e9a8a]">
+                Failed
+              </p>
+              <p className="font-bold text-[#fca5a5] mt-1">{failed}</p>
+            </div>
+          </div>
+
+          <div className="mt-4 pt-4 border-t border-[rgba(72,220,130,0.16)]">
+            {user ? (
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <p className="text-xs text-[#8ba896]">Logged in as</p>
+                  <p className="text-sm text-[#edf9f1]">{user.name}</p>
+                </div>
+                <button
+                  type="button"
+                  className="px-2 py-1 rounded-md border border-[rgba(72,220,130,0.25)] text-xs text-[#8ba896] hover:text-[#edf9f1]"
+                  onClick={handleLogout}>
+                  Logout
+                </button>
+              </div>
+            ) : (
+              <p className="text-xs text-[#8ba896]">
+                Sign in to save every prediction in history.
               </p>
             )}
           </div>
+        </aside>
 
-          {results.length > 0 && (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {results.map((result, index) => (
-                <DiagnosisCard
-                  key={index}
-                  result={result}
-                  expanded={expandedIndex === index}
-                  onExpand={() => setExpandedIndex(expandedIndex === index ? null : index)}
-                  onOpenChatGpt={() => handleOpenChatGpt(index)}
-                  imageUrl={selectedFiles[index]?.previewUrl}
-                />
-              ))}
+        <section className="min-w-0 rounded-2xl border border-[rgba(72,220,130,0.16)] bg-[linear-gradient(180deg,rgba(17,25,22,0.92),rgba(10,15,13,0.96))] p-4 md:p-5 shadow-[0_20px_40px_rgba(0,0,0,0.25)]">
+          {view === "auth" && !user && (
+            <div className="max-w-md animate-fade-in">
+              <AuthForm
+                onAuth={() => {
+                  setUser(getUser());
+                  setView("upload");
+                }}
+                error={error}
+              />
             </div>
           )}
-        </section>
-      )}
 
-      {view === "history" && user && (
-        <section className="p-5 bg-[#111916] border border-[rgba(72,220,130,0.15)] rounded-xl">
-          <h3 className="text-xs font-medium uppercase tracking-wider text-[#8ba896] mb-4">
-            Prediction History
-          </h3>
-          {history.length === 0 ? (
-            <p className="text-center py-8 text-[#4d665a] text-sm">
-              No predictions yet. Upload an image to get started!
-            </p>
-          ) : (
-            <div className="space-y-2 max-h-[400px] overflow-y-auto">
-            {history.map((item) => (
-              <HistoryItemComponent key={item.id} item={item} onDelete={handleDelete} />
-            ))}
-          </div>
+          {view === "upload" && (
+            <div className="space-y-4 animate-fade-in">
+              <UploadDropzone disabled={isBatchRunning} onFiles={addFiles} />
+
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={runBatchPredictions}
+                  disabled={isBatchRunning || queue.length === 0}
+                  className="px-4 py-3 rounded-xl bg-[#48dc82] text-[#0a0f0d] text-xs font-bold uppercase tracking-[0.12em] hover:brightness-95 disabled:opacity-50">
+                  {isBatchRunning
+                    ? "Running Sequence..."
+                    : "Predict All One by One"}
+                </button>
+                <button
+                  type="button"
+                  onClick={clearQueue}
+                  disabled={isBatchRunning || queue.length === 0}
+                  className="px-4 py-3 rounded-xl border border-[rgba(72,220,130,0.25)] text-xs font-semibold uppercase tracking-[0.1em] text-[#8ba896] hover:text-[#edf9f1] disabled:opacity-50">
+                  Clear Queue
+                </button>
+              </div>
+
+              {error && (
+                <p className="p-3 bg-[rgba(248,113,113,0.1)] border border-[rgba(248,113,113,0.3)] rounded-md text-sm text-[#f87171]">
+                  {error}
+                </p>
+              )}
+
+              {queue.length === 0 ? (
+                <div className="rounded-2xl border border-[rgba(72,220,130,0.14)] bg-[#0d1512] p-8 text-center">
+                  <p className="text-[#8ba896]">
+                    Your flow queue is empty. Add leaf images to begin.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {queue.map((item, index) => (
+                    <QueueFlowCard
+                      key={item.id}
+                      item={item}
+                      index={index}
+                      active={activeQueueId === item.id}
+                      running={isBatchRunning}
+                      onRemove={removeQueueItem}
+                      onRetry={(failedItem) => {
+                        void runSinglePrediction(failedItem);
+                      }}
+                      onOpenChatGpt={handleOpenChatGpt}
+                    />
+                  ))}
+                </div>
+              )}
+
+              {!user && (
+                <section className="text-center py-4 text-[#8ba896] text-sm">
+                  <button
+                    onClick={() => setView("auth")}
+                    className="text-[#48dc82] underline">
+                    Sign in
+                  </button>{" "}
+                  to save your predictions
+                </section>
+              )}
+            </div>
           )}
-        </section>
-      )}
 
-      {!user && view === "upload" && (
-        <section className="text-center py-6 text-[#8ba896] text-sm">
-          <button onClick={() => setView("auth")} className="text-[#48dc82] underline">
-            Sign in
-          </button>{" "}
-          to save your predictions
-        </section>
-      )}
+          {view === "history" && user && (
+            <section className="p-5 bg-[#111916] border border-[rgba(72,220,130,0.15)] rounded-xl animate-fade-in">
+              <h3 className="text-xs font-medium uppercase tracking-wider text-[#8ba896] mb-4">
+                Prediction History
+              </h3>
+              {history.length === 0 ? (
+                <p className="text-center py-8 text-[#4d665a] text-sm">
+                  No predictions yet. Upload an image to get started.
+                </p>
+              ) : (
+                <div className="space-y-2 max-h-[560px] overflow-y-auto pr-1">
+                  {history.map((item) => (
+                    <HistoryItemComponent
+                      key={item.id}
+                      item={item}
+                      onDelete={handleDeleteHistory}
+                    />
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
 
-      <footer className="pt-4 border-t border-[rgba(72,220,130,0.15)] text-center text-xs text-[#4d665a]">
-        GreenGuard v0.1 —{" "}
-        <a
-          href="https://github.com/thetanav/greenguard"
-          target="_blank"
-          rel="noopener"
-          className="text-[#48dc82] no-underline hover:underline"
-        >
-          View on GitHub
-        </a>
-      </footer>
+          <footer className="pt-5 mt-5 border-t border-[rgba(72,220,130,0.15)] text-center text-xs text-[#4d665a]">
+            GreenGuard v0.2 Flow UI ·{" "}
+            <a
+              href="https://github.com/thetanav/greenguard"
+              target="_blank"
+              rel="noopener"
+              className="text-[#48dc82] no-underline hover:underline">
+              View on GitHub
+            </a>
+          </footer>
+        </section>
+      </div>
     </main>
   );
 }

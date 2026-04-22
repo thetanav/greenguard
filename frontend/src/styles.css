@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Playfair+Display:wght@600;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@100..900&display=swap");
 @import "tailwindcss";
 
 @theme {
@@ -11,8 +11,7 @@
   --color-text-secondary: #8ba896;
   --color-text-muted: #4d665a;
 
-  --font-family-mono: 'JetBrains Mono', monospace;
-  --font-family-serif: 'Playfair Display', serif;
+  --font-family: "Geist";
 }
 
 *,
@@ -30,7 +29,7 @@ body {
   margin: 0;
   min-height: 100vh;
   color: #e8f5ec;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-family);
   background: #0a0f0d;
   line-height: 1.6;
 }

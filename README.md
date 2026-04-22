@@ -78,7 +78,7 @@ model.save("plant_diseases.h5")
 
 ```env
 MODEL_PATH=../plant_diseases.h5
-CLASS_LABELS=Potato___Early_blight,Potato___healthy,Potato___Late_blight
+CLASS_LABELS=Potato___Early_blight,Potato___Late_blight,Potato___healthy
 IMAGE_SIZE=224
 MAX_UPLOAD_SIZE_MB=8
 ```
