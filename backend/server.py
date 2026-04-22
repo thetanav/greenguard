@@ -19,13 +19,14 @@ class Settings(BaseSettings):
     app_name: str = "GreenGuard API"
     app_version: str = "0.1.0"
     frontend_origin: str = "http://localhost:5173"
-    model_path: str = "./plant_diseases.h5"
+
     class_labels: str = "Potato___Early_blight,Potato___healthy,Potato___Late_blight"
     image_size: int = 224
     max_upload_size_mb: int = 8
     jwt_secret: str = "your-super-secret-key-change-in-production"
     jwt_algorithm: str = "HS256"
     jwt_expiry_hours: int = 24
+    model_path: str = "/home/tanav/projects/greenguard/plant_diseases.h5"
 
 
 settings = Settings()
@@ -109,7 +110,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.frontend_origin],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

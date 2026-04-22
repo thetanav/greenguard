@@ -10,5 +10,9 @@
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+    <script>
+      // Ensure Vite environment is available in case the app is served differently
+      if (import.meta.hot) import.meta.hot.accept();
+    </script>
   </body>
 </html>
