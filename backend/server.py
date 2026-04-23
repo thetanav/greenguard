@@ -1,3 +1,5 @@
+import ast
+import json
 from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
@@ -19,34 +21,32 @@ class Settings(BaseSettings):
     app_version: str = "0.1.0"
     frontend_origin: str = "http://localhost:5173"
 
-    class_labels: str = "Potato___Early_blight,Potato___Late_blight,Potato___healthy"
-    image_size: int = 224
+    class_labels: str = (
+        "Pepper__bell___Bacterial_spot,"
+        "Pepper__bell___healthy,"
+        "Potato___Early_blight,"
+        "Potato___Late_blight,"
+        "Potato___healthy,"
+        "Tomato_Bacterial_spot,"
+        "Tomato_Early_blight,"
+        "Tomato_Late_blight,"
+        "Tomato_Leaf_Mold,"
+        "Tomato_Septoria_leaf_spot,"
+        "Tomato_Spider_mites_Two_spotted_spider_mite,"
+        "Tomato__Target_Spot,"
+        "Tomato__Tomato_YellowLeaf__Curl_Virus,"
+        "Tomato__Tomato_mosaic_virus,"
+        "Tomato_healthy"
+    )
+    image_size: int = 256
     max_upload_size_mb: int = 8
     jwt_secret: str = "your-super-secret-key-change-in-production"
     jwt_algorithm: str = "HS256"
     jwt_expiry_hours: int = 24
-    model_path: str = "/home/tanav/projects/greenguard/plant_diseases.h5"
+    model_path: str = "../lstm_all_class.h5"
 
 
 settings = Settings()
-
-treatment_map = {
-    "Potato___Early_blight": [
-        "Use certified disease-free seed tubers in the next cycle.",
-        "Apply a protective fungicide program if infection spreads.",
-        "Remove infected lower leaves and improve plant spacing.",
-    ],
-    "Potato___Late_blight": [
-        "Remove and destroy infected plants immediately.",
-        "Avoid overhead irrigation and keep foliage dry.",
-        "Spray late-blight specific fungicide as per local guidelines.",
-    ],
-    "Potato___healthy": [
-        "Continue balanced fertilization and irrigation schedule.",
-        "Scout field weekly to detect symptoms early.",
-        "Maintain crop rotation and field sanitation.",
-    ],
-}
 
 
 sqlmodel.Field(default=None, primary_key=True)
@@ -88,7 +88,9 @@ def load_model():
             model_path = str(backend_dir / settings.model_path)
         if Path(model_path).exists():
             model = tf.keras.models.load_model(model_path)
-            warmup = np.zeros((1, 224, 224, 3), dtype=np.float32)
+            warmup = np.zeros(
+                (1, settings.image_size, settings.image_size, 3), dtype=np.float32
+            )
             _ = model.predict(warmup, verbose=0)
             return model
     except Exception:
@@ -96,8 +98,60 @@ def load_model():
     return None
 
 
-model = load_model()
+model = None
+model_load_attempted = False
 labels = [label.strip() for label in settings.class_labels.split(",") if label.strip()]
+
+
+def split_label_parts(label: str) -> tuple[str, str]:
+    normalized = label.replace("___", "|").replace("__", "|").replace("_", " ")
+    parts = [part.strip() for part in normalized.split("|") if part.strip()]
+    if len(parts) == 1:
+        return parts[0], parts[0]
+    return parts[0], " - ".join(parts[1:])
+
+
+def build_recommendations(label: str) -> list[str]:
+    plant, disease = split_label_parts(label)
+    disease_lower = disease.lower()
+
+    if "healthy" in disease_lower:
+        return [
+            f"{plant}: crop looks healthy. Continue regular monitoring.",
+            "Keep irrigation balanced and avoid long periods of wet foliage.",
+            "Maintain field sanitation and rotate crops between seasons.",
+        ]
+
+    recs = [
+        f"Isolate affected {plant.lower()} leaves or plants to reduce spread.",
+        "Clean tools and avoid handling healthy plants after infected ones.",
+    ]
+
+    if "virus" in disease_lower:
+        recs.append(
+            "Control insect vectors such as whiteflies and remove infected plants early."
+        )
+    elif "bacterial" in disease_lower:
+        recs.append(
+            "Reduce leaf wetness, improve airflow, and use copper-based sprays where appropriate."
+        )
+    elif "mite" in disease_lower:
+        recs.append(
+            "Inspect leaf undersides and use an appropriate miticide or biological control."
+        )
+    else:
+        recs.append(
+            "Use a crop-appropriate fungicide program and avoid overhead irrigation."
+        )
+
+    return recs
+
+
+def parse_stored_json_list(raw: str):
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return ast.literal_eval(raw)
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
@@ -249,9 +303,8 @@ def process_image(file_bytes: bytes) -> np.ndarray:
     try:
         image = Image.open(BytesIO(file_bytes)).convert("RGB")
         image = image.resize((settings.image_size, settings.image_size))
-        # The exported EfficientNet model already includes internal rescaling.
-        # Keep pixel range in [0, 255] here to avoid double normalization.
-        arr = np.array(image, dtype=np.float32)
+        # The LSTM model was trained on images normalized to [0, 1].
+        arr = np.array(image, dtype=np.float32) / 255.0
         arr = np.expand_dims(arr, axis=0)
     except Exception as exc:
         raise HTTPException(
@@ -262,6 +315,15 @@ def process_image(file_bytes: bytes) -> np.ndarray:
 
 
 def get_prediction(arr: np.ndarray) -> dict:
+    global model, model_load_attempted
+
+    if model is None and not model_load_attempted:
+        model = load_model()
+        model_load_attempted = True
+
+    if model is None:
+        raise HTTPException(status_code=503, detail="Model is not available.")
+
     preds = model.predict(arr, verbose=0)
     probs = np.asarray(preds[0], dtype=np.float32)
     top_idx = int(np.argmax(probs))
@@ -279,7 +341,7 @@ def get_prediction(arr: np.ndarray) -> dict:
         "label": top_label,
         "confidence": round(float(probs[top_idx]), 4),
         "details": details,
-        "recommendations": treatment_map.get(top_label, []),
+        "recommendations": build_recommendations(top_label),
         "model_ready": True,
         "image_index": 0,
     }
@@ -313,8 +375,8 @@ async def predict(files: list[UploadFile] = File(...), token: str | None = None)
                     user_id=user_id,
                     label=result["label"],
                     confidence=result["confidence"],
-                    details=str(result["details"]),
-                    recommendations=str(result["recommendations"]),
+                    details=json.dumps(result["details"]),
+                    recommendations=json.dumps(result["recommendations"]),
                     image_name=files[result["image_index"]].filename or "unknown",
                 )
                 session.add(pred)
@@ -343,8 +405,8 @@ def get_history(token: str = Depends(oauth2_scheme)):
                 id=p.id,
                 label=p.label,
                 confidence=p.confidence,
-                details=eval(p.details),
-                recommendations=eval(p.recommendations),
+                details=parse_stored_json_list(p.details),
+                recommendations=parse_stored_json_list(p.recommendations),
                 image_name=p.image_name,
                 created_at=p.created_at,
             )

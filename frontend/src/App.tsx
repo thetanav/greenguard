@@ -12,6 +12,7 @@ import {
   User,
   HistoryItem,
 } from "./services/api";
+import { LeafIcon, RotateCcw, TrashIcon } from "lucide-react";
 
 interface SelectedFile {
   file: File;
@@ -31,6 +32,22 @@ function formatLabel(raw: string): string {
   return raw?.replace(/___/g, " - ").replace(/_/g, " ") || "-";
 }
 
+function parseLabel(raw: string): {
+  plant: string;
+  condition: string;
+  isHealthy: boolean;
+} {
+  const normalized = raw.replace(/___/g, "|").replace(/__/g, "|");
+  const [plantPart, ...rest] = normalized.split("|").filter(Boolean);
+  const plant = (plantPart || raw).replace(/_/g, " ");
+  const condition = (rest.join(" - ") || plantPart || raw).replace(/_/g, " ");
+  return {
+    plant,
+    condition,
+    isHealthy: condition.toLowerCase().includes("healthy"),
+  };
+}
+
 function makeQueueId(): string {
   if (
     typeof crypto !== "undefined" &&
@@ -39,6 +56,49 @@ function makeQueueId(): string {
     return crypto.randomUUID();
   }
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function buildChatPrompt(
+  imageName: string,
+  result: Pick<
+    PredictionResult,
+    "label" | "confidence" | "details" | "recommendations"
+  >,
+): string {
+  const parsed = parseLabel(result.label);
+  const topMatches = (result.details || [])
+    .slice(0, 3)
+    .map(
+      (detail) =>
+        `${formatLabel(detail.label)} (${Math.round(detail.score * 100)}%)`,
+    )
+    .join(", ");
+  const recommendations = (result.recommendations || []).slice(0, 5);
+
+  return [
+    "Help me interpret this plant disease model prediction and give practical next steps.",
+    "",
+    `Image: ${imageName}`,
+    `Plant: ${parsed.plant}`,
+    `Predicted condition: ${parsed.condition}`,
+    `Confidence: ${Math.round(result.confidence * 100)}%`,
+    `Top matches: ${topMatches || "N/A"}`,
+    recommendations.length > 0
+      ? `Model recommendations: ${recommendations.join("; ")}`
+      : "Model recommendations: N/A",
+    "",
+    "Please provide:",
+    "1) a confidence-aware explanation of what this likely means,",
+    "2) immediate actions I should take today,",
+    "3) low-cost treatment options (organic and conventional),",
+    "4) prevention steps for the next 2 weeks,",
+    "5) what symptoms would indicate I should re-check or seek expert help.",
+  ].join("\n");
+}
+
+function openChatGptWithPrompt(prompt: string): void {
+  const url = `https://chatgpt.com/?q=${encodeURIComponent(prompt)}`;
+  window.open(url, "_blank", "noopener,noreferrer");
 }
 
 function UploadDropzone({
@@ -142,11 +202,11 @@ function QueueCard({
       className={`flex items-center justify-between p-3 border-2 border-black bg-white ${
         active ? "shadow-[6px_6px_0_0_#000]" : ""
       }`}>
-      <div className="flex items-center gap-3 flex-1 min-w-0">
+      <div className="flex items-start gap-3 flex-1 min-w-0">
         <img
           src={item.previewUrl}
           alt={item.file.name}
-          className="w-14 h-14 object-cover border-2 border-black bg-[#efefef]"
+          className="w-20 h-20 object-cover border-2 border-black bg-[#efefef]"
         />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 mb-1">
@@ -157,10 +217,23 @@ function QueueCard({
             {item.file.name}
           </p>
           {item.result && (
-            <p className="text-xs text-black mt-1 uppercase tracking-[0.05em]">
-              {formatLabel(item.result.label)} (
-              {Math.round(item.result.confidence * 100)}%)
-            </p>
+            <div className="mt-1 space-y-1">
+              <p className="text-xs text-black uppercase tracking-[0.05em]">
+                {parseLabel(item.result.label).plant} ·{" "}
+                {parseLabel(item.result.label).condition} (
+                {Math.round(item.result.confidence * 100)}%)
+              </p>
+              <p className="text-[11px] text-black">
+                Top matches:{" "}
+                {item.result.details
+                  .slice(0, 3)
+                  .map(
+                    (detail) =>
+                      `${formatLabel(detail.label)} ${Math.round(detail.score * 100)}%`,
+                  )
+                  .join(" · ")}
+              </p>
+            </div>
           )}
           {item.error && (
             <p className="text-xs text-black mt-1 bg-[#ff7d66] inline-block px-2 py-0.5 border border-black">
@@ -169,18 +242,27 @@ function QueueCard({
           )}
         </div>
       </div>
-      <div className="flex items-center gap-2 ml-3">
+      <div className="flex flex-col items-center gap-2 ml-3">
+        <button
+          onClick={() => {
+            if (!item.result) return;
+            openChatGptWithPrompt(buildChatPrompt(item.file.name, item.result));
+          }}
+          disabled={!item.result}
+          className="brutal-btn w-10 h-10 !p-0 flex items-center justify-center bg-white">
+          <img src="/openai.svg" draggable={false} className="w-6 h-6" />
+        </button>
         {item.status === "failed" && (
           <button
             onClick={() => onRetry(item)}
-            className="brutal-btn px-3 py-1.5 text-xs bg-[#ffe44d]">
-            Retry
+            className="brutal-btn w-10 h-10 !p-0 flex items-center justify-center bg-[#ffe44d]">
+            <RotateCcw className="w-4 h-4" />
           </button>
         )}
         <button
           onClick={() => onRemove(item.id)}
-          className="brutal-btn px-3 py-1.5 text-xs bg-[#ff7d66]">
-          Remove
+          className="brutal-btn w-10 h-10 !p-0 flex items-center justify-center  bg-[#ff7d66]">
+          <TrashIcon className="w-4 h-4" />
         </button>
       </div>
     </div>
@@ -201,15 +283,25 @@ function HistoryItemCard({
           {item.image_name}
         </p>
         <p className="text-xs text-black">
-          {formatLabel(item.label)} · {Math.round(item.confidence * 100)}% ·{" "}
+          {parseLabel(item.label).plant} · {parseLabel(item.label).condition} ·{" "}
+          {Math.round(item.confidence * 100)}% ·{" "}
           {new Date(item.created_at).toLocaleDateString()}
         </p>
       </div>
-      <button
-        onClick={() => onDelete(item.id)}
-        className="ml-2 px-2 py-1 text-xs text-black border-2 border-black bg-[#ff7d66]">
-        Delete
-      </button>
+      <div className="ml-2 flex items-center gap-2">
+        <button
+          onClick={() =>
+            openChatGptWithPrompt(buildChatPrompt(item.image_name, item))
+          }
+          className="brutal-btn px-3 py-1.5 text-xs bg-white">
+          ChatGPT
+        </button>
+        <button
+          onClick={() => onDelete(item.id)}
+          className="px-2 py-1 text-xs text-black border-2 border-black bg-[#ff7d66]">
+          Delete
+        </button>
+      </div>
     </div>
   );
 }
@@ -464,11 +556,7 @@ export default function App() {
         {/* Sidebar */}
         <aside className="lg:sticky lg:top-4 h-fit p-5 brutal-panel">
           <div className="flex items-center gap-3 pb-4 border-b-2 border-black">
-            <img
-              src="https://emojicdn.elk.sh/🌱"
-              defaultValue={"🌱"}
-              className="w-8 h-8"
-            />
+            <LeafIcon className="w-8 h-8 text-green-600" />
             <div>
               <h1 className="text-lg font-black text-black uppercase tracking-[0.06em]">
                 GreenGuard
@@ -560,6 +648,11 @@ export default function App() {
             <div className="space-y-4 animate-fade-in">
               <UploadDropzone disabled={isRunning} onFiles={addFiles} />
 
+              <p className="text-sm text-black border border-black bg-[#f4f4f4] px-3 py-2 inline-block">
+                Multi-plant model active: pepper, potato, and tomato leaf
+                classes.
+              </p>
+
               <div className="flex gap-2">
                 <button
                   onClick={runAllPredictions}
@@ -585,7 +678,8 @@ export default function App() {
 
               {queue.length === 0 ? (
                 <div className="py-12 text-center text-black border-2 border-dashed border-black bg-[#f4f4f4]">
-                  No images added. Upload leaf images to diagnose.
+                  No images added. Upload pepper, potato, or tomato leaf images
+                  to diagnose.
                 </div>
               ) : (
                 <div className="space-y-2">
