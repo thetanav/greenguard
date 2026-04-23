@@ -1,17 +1,38 @@
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const API_URL = import.meta.env.VITE_API_URL || "";
 
-interface User {
+function buildUrl(path: string): string {
+  return `${API_URL}${path}`;
+}
+
+async function parseErrorMessage(
+  res: Response,
+  fallbackMessage: string,
+): Promise<string> {
+  const err = await res.json().catch(() => ({}));
+  return err.detail || fallbackMessage;
+}
+
+function toNetworkError(err: unknown): Error {
+  if (err instanceof TypeError) {
+    return new Error(
+      "Network/certificate error while contacting backend. If you use HTTPS with a self-signed cert, run frontend through Vite proxy or trust the backend certificate.",
+    );
+  }
+  return err instanceof Error ? err : new Error("Request failed");
+}
+
+export interface User {
   user_id: number;
   email: string;
   name: string;
 }
 
-interface PredictionDetail {
+export interface PredictionDetail {
   label: string;
   score: number;
 }
 
-interface PredictionResult {
+export interface PredictionResult {
   label: string;
   confidence: number;
   details: PredictionDetail[];
@@ -19,7 +40,7 @@ interface PredictionResult {
   model_ready: boolean;
 }
 
-interface HistoryItem {
+export interface HistoryItem {
   id: number;
   label: string;
   confidence: number;
@@ -30,7 +51,9 @@ interface HistoryItem {
 }
 
 let authToken: string | null = localStorage.getItem("gg_token");
-let currentUser: User | null = JSON.parse(localStorage.getItem("gg_user") || "null");
+let currentUser: User | null = JSON.parse(
+  localStorage.getItem("gg_user") || "null",
+);
 
 export function getToken(): string | null {
   return authToken;
@@ -52,43 +75,64 @@ function setAuth(token: string | null, user: User | null): void {
   }
 }
 
-export async function register(email: string, password: string, name: string): Promise<void> {
-  const res = await fetch(`${API_URL}/api/auth/register`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password, name }),
-  });
+export async function register(
+  email: string,
+  password: string,
+  name: string,
+): Promise<void> {
+  try {
+    const res = await fetch(buildUrl("/api/auth/register"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password, name }),
+    });
 
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.detail || "Registration failed");
+    if (!res.ok) {
+      throw new Error(await parseErrorMessage(res, "Registration failed"));
+    }
+
+    const data = await res.json();
+    setAuth(data.token, {
+      user_id: data.user_id,
+      email: data.email,
+      name: data.name,
+    });
+  } catch (err) {
+    throw toNetworkError(err);
   }
-
-  const data = await res.json();
-  setAuth(data.token, { user_id: data.user_id, email: data.email, name: data.name });
 }
 
 export async function login(email: string, password: string): Promise<void> {
-  const res = await fetch(`${API_URL}/api/auth/login`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password }),
-  });
+  try {
+    const res = await fetch(buildUrl("/api/auth/login"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
 
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.detail || "Login failed");
+    if (!res.ok) {
+      throw new Error(await parseErrorMessage(res, "Login failed"));
+    }
+
+    const data = await res.json();
+    setAuth(data.token, {
+      user_id: data.user_id,
+      email: data.email,
+      name: data.name,
+    });
+  } catch (err) {
+    throw toNetworkError(err);
   }
-
-  const data = await res.json();
-  setAuth(data.token, { user_id: data.user_id, email: data.email, name: data.name });
 }
 
 export function logout(): void {
   setAuth(null, null);
 }
 
-export async function predict(files: File[], token: string | null = getToken()): Promise<PredictionResult[]> {
+export async function predict(
+  files: File[],
+  token: string | null = getToken(),
+): Promise<PredictionResult[]> {
   const formData = new FormData();
   files.forEach((file) => {
     formData.append("files", file);
@@ -97,46 +141,66 @@ export async function predict(files: File[], token: string | null = getToken()):
   const headers: Record<string, string> = {};
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
-  const res = await fetch(`${API_URL}/predict`, {
-    method: "POST",
-    headers,
-    body: formData,
-  });
+  try {
+    const res = await fetch(buildUrl("/predict"), {
+      method: "POST",
+      headers,
+      body: formData,
+    });
 
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.detail || "Prediction failed");
+    if (!res.ok) {
+      throw new Error(await parseErrorMessage(res, "Prediction failed"));
+    }
+
+    const results = await res.json();
+    return Array.isArray(results) ? results : [results];
+  } catch (err) {
+    throw toNetworkError(err);
   }
-
-  const results = await res.json();
-  return Array.isArray(results) ? results : [results];
 }
 
-export async function getHistory(token: string | null = getToken()): Promise<HistoryItem[]> {
-  const res = await fetch(`${API_URL}/api/history`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+export async function getHistory(
+  token: string | null = getToken(),
+): Promise<HistoryItem[]> {
+  try {
+    const res = await fetch(buildUrl("/api/history"), {
+      headers: { Authorization: `Bearer ${token}` },
+    });
 
-  if (!res.ok) {
-    throw new Error("Failed to fetch history");
+    if (!res.ok) {
+      throw new Error("Failed to fetch history");
+    }
+
+    return res.json();
+  } catch (err) {
+    throw toNetworkError(err);
   }
-
-  return res.json();
 }
 
-export async function deleteHistoryItem(predId: number, token: string | null = getToken()): Promise<void> {
-  const res = await fetch(`${API_URL}/api/history/${predId}`, {
-    method: "DELETE",
-    headers: { Authorization: `Bearer ${token}` },
-  });
+export async function deleteHistoryItem(
+  predId: number,
+  token: string | null = getToken(),
+): Promise<void> {
+  try {
+    const res = await fetch(buildUrl(`/api/history/${predId}`), {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    });
 
-  if (!res.ok) {
-    throw new Error("Failed to delete");
+    if (!res.ok) {
+      throw new Error("Failed to delete");
+    }
+  } catch (err) {
+    throw toNetworkError(err);
   }
 }
 
 export async function getHealthStatus(): Promise<{ status: string }> {
-  const res = await fetch(`${API_URL}/health`);
-  if (!res.ok) throw new Error("Backend unavailable");
-  return res.json();
+  try {
+    const res = await fetch(buildUrl("/health"));
+    if (!res.ok) throw new Error("Backend unavailable");
+    return res.json();
+  } catch (err) {
+    throw toNetworkError(err);
+  }
 }

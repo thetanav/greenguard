@@ -31,49 +31,6 @@ function formatLabel(raw: string): string {
   return raw?.replace(/___/g, " - ").replace(/_/g, " ") || "-";
 }
 
-function buildChatGptUrl(
-  result: PredictionResult,
-  fileName: string | undefined,
-): string {
-  const label = formatLabel(result?.label || "Unknown disease");
-  const confidence = result?.confidence
-    ? `${(result.confidence * 100).toFixed(1)}%`
-    : "unknown";
-  const recommendations =
-    Array.isArray(result?.recommendations) && result.recommendations.length > 0
-      ? result.recommendations
-          .map((item, index) => `${index + 1}. ${item}`)
-          .join("\n")
-      : "No recommendations were provided by the app.";
-
-  const details =
-    Array.isArray(result?.details) && result.details.length > 0
-      ? result.details
-          .map(
-            (item) =>
-              `- ${formatLabel(item.label || "Unknown")}: ${(item.score * 100).toFixed(1)}%`,
-          )
-          .join("\n")
-      : "- No extra detail available.";
-
-  const prompt = `I used GreenGuard to analyze a plant leaf image${fileName ? ` (${fileName})` : ""}.
-
-Prediction summary:
-- Disease: ${label}
-- Confidence: ${confidence}
-- Model mode: ${result?.model_ready ? "ML model" : "demo fallback"}
-
-Details:
-${details}
-
-Current recommendations from GreenGuard:
-${recommendations}
-
-Give me a practical, step-by-step treatment plan, likely causes, urgency level, and prevention tips for a farmer or gardener. Keep the answer clear and actionable.`;
-
-  return `https://chatgpt.com/?q=${encodeURIComponent(prompt)}`;
-}
-
 function makeQueueId(): string {
   if (
     typeof crypto !== "undefined" &&
@@ -84,169 +41,6 @@ function makeQueueId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-function StatusPill({ status }: { status: QueueStatus }) {
-  const map = {
-    queued:
-      "bg-[rgba(148,163,184,0.12)] text-slate-300 border-[rgba(148,163,184,0.35)]",
-    processing:
-      "bg-[rgba(251,191,36,0.12)] text-amber-300 border-[rgba(251,191,36,0.35)]",
-    done: "bg-[rgba(72,220,130,0.12)] text-[#48dc82] border-[rgba(72,220,130,0.35)]",
-    failed:
-      "bg-[rgba(248,113,113,0.12)] text-[#f87171] border-[rgba(248,113,113,0.35)]",
-  };
-
-  return (
-    <span
-      className={`px-2 py-1 text-[10px] uppercase tracking-[0.12em] border rounded-full ${map[status]}`}>
-      {status}
-    </span>
-  );
-}
-
-function QueueFlowCard({
-  item,
-  index,
-  active,
-  running,
-  onRemove,
-  onRetry,
-  onOpenChatGpt,
-}: {
-  item: QueueItem;
-  index: number;
-  active: boolean;
-  running: boolean;
-  onRemove: (id: string) => void;
-  onRetry: (item: QueueItem) => void;
-  onOpenChatGpt: (item: QueueItem) => void;
-}) {
-  const confidencePct = item.result
-    ? (item.result.confidence * 100).toFixed(1)
-    : null;
-
-  return (
-    <div
-      className={`relative overflow-hidden rounded-2xl border transition-all duration-250 ${
-        active
-          ? "border-[#48dc82] bg-[linear-gradient(145deg,rgba(72,220,130,0.14),rgba(11,21,18,0.9))] shadow-[0_12px_40px_rgba(72,220,130,0.18)]"
-          : "border-[rgba(72,220,130,0.16)] bg-[#111916]"
-      }`}>
-      <div className="p-4 md:p-5">
-        <div className="flex items-start gap-4">
-          <div className="flex flex-col items-center mt-1">
-            <div className="w-7 h-7 rounded-full bg-[#0c1310] border border-[rgba(72,220,130,0.35)] text-[11px] font-semibold flex items-center justify-center text-[#48dc82]">
-              {index + 1}
-            </div>
-            <div className="w-px h-full mt-2 bg-[linear-gradient(180deg,rgba(72,220,130,0.42),transparent)]" />
-          </div>
-
-          <div className="flex-1">
-            <div className="grid grid-cols-1 md:grid-cols-[112px_minmax(0,1fr)] gap-3">
-              <img
-                src={item.previewUrl}
-                alt={item.file.name}
-                className="w-full h-24 object-cover rounded-xl border border-[rgba(72,220,130,0.16)]"
-              />
-
-              <div className="rounded-xl border border-[rgba(72,220,130,0.12)] bg-[#0d1512] p-3">
-                {item.result ? (
-                  <>
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="text-sm text-[#8ea99a]">Prediction</p>
-                      {confidencePct && (
-                        <span className="text-base font-bold text-[#48dc82]">
-                          {confidencePct}%
-                        </span>
-                      )}
-                    </div>
-                    <p className="font-semibold text-[#edf9f1] mt-0.5">
-                      {formatLabel(item.result.label)}
-                    </p>
-                    <div className="mt-2 h-1.5 bg-[#1a2622] rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-gradient-to-r from-[#48dc82] to-[#2dd4bf] rounded-full transition-all duration-500"
-                        style={{
-                          width: `${Math.max(5, parseFloat(confidencePct || "5"))}%`,
-                        }}
-                      />
-                    </div>
-                  </>
-                ) : item.status === "failed" ? (
-                  <p className="text-sm text-[#fca5a5]">
-                    {item.error || "Prediction failed"}
-                  </p>
-                ) : (
-                  <p className="text-sm text-[#8ea99a]">
-                    {item.status === "processing"
-                      ? "Analyzing this image now..."
-                      : "Waiting in queue"}
-                  </p>
-                )}
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center justify-between gap-2 mt-3">
-              <div>
-                <h4 className="text-sm leading-none text-[#edf9f1] truncate w-fit">
-                  {item.file.name}
-                </h4>
-                <p className="text-[11px] text-[#7e9a8a] mt-1">
-                  {Math.max(1, Math.round(item.file.size / 1024))} KB
-                </p>
-              </div>
-              <StatusPill status={item.status} />
-            </div>
-
-            {item.result &&
-              Array.isArray(item.result.recommendations) &&
-              item.result.recommendations.length > 0 && (
-                <div className="mt-3 rounded-xl border border-[rgba(72,220,130,0.12)] bg-[#0d1512] p-3">
-                  <p className="text-[11px] uppercase tracking-[0.12em] text-[#8ea99a] mb-2">
-                    Quick treatment
-                  </p>
-                  <ul className="space-y-1">
-                    {item.result.recommendations.slice(0, 3).map((rec, idx) => (
-                      <li key={idx} className="text-sm text-[#edf9f1]">
-                        {idx + 1}. {rec}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-
-            <div className="mt-3 flex flex-wrap gap-2">
-              {item.result && (
-                <button
-                  type="button"
-                  className="px-3 py-2 text-xs font-semibold uppercase tracking-[0.1em] rounded-md border border-[rgba(72,220,130,0.3)] text-[#48dc82] hover:bg-[rgba(72,220,130,0.12)] transition-colors"
-                  onClick={() => onOpenChatGpt(item)}>
-                  Open in ChatGPT
-                </button>
-              )}
-              {item.status === "failed" && (
-                <button
-                  type="button"
-                  className="px-3 py-2 text-xs font-semibold uppercase tracking-[0.1em] rounded-md border border-[rgba(251,191,36,0.35)] text-amber-300 hover:bg-[rgba(251,191,36,0.12)] transition-colors"
-                  disabled={running}
-                  onClick={() => onRetry(item)}>
-                  Retry
-                </button>
-              )}
-              <button
-                type="button"
-                className="px-3 py-2 text-xs font-semibold uppercase tracking-[0.1em] rounded-md border border-[rgba(248,113,113,0.3)] text-[#fca5a5] hover:bg-[rgba(248,113,113,0.12)] transition-colors disabled:opacity-40"
-                disabled={running}
-                onClick={() => onRemove(item.id)}>
-                Remove
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function UploadDropzone({
   disabled,
   onFiles,
@@ -254,153 +48,146 @@ function UploadDropzone({
   disabled: boolean;
   onFiles: (files: File[]) => void;
 }) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [dragging, setDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isDragOver, setIsDragOver] = useState(false);
 
-  const addFromInput = (files: FileList | null) => {
-    if (!files) return;
-    const imageFiles = Array.from(files).filter((file) =>
-      file.type.startsWith("image/"),
-    );
-    if (imageFiles.length > 0) {
-      onFiles(imageFiles);
-    }
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(false);
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length > 0) onFiles(files);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(true);
+  };
+
+  const handleDragLeave = () => setIsDragOver(false);
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length > 0) onFiles(files);
   };
 
   return (
     <div
-      className={`rounded-2xl border-2 border-dashed p-6 md:p-8 transition-all ${
-        dragging
-          ? "border-[#48dc82] bg-[rgba(72,220,130,0.08)]"
-          : "border-[rgba(72,220,130,0.22)] bg-[rgba(10,15,13,0.7)] hover:border-[rgba(72,220,130,0.45)]"
-      } ${disabled ? "opacity-70" : ""}`}
-      onDragOver={(e) => {
-        e.preventDefault();
-        if (!disabled) setDragging(true);
-      }}
-      onDragLeave={() => setDragging(false)}
-      onDrop={(e) => {
-        e.preventDefault();
-        setDragging(false);
-        if (!disabled) addFromInput(e.dataTransfer.files);
-      }}>
+      onClick={() => fileInputRef.current?.click()}
+      onDrop={handleDrop}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      className={`brutal-dropzone ${
+        isDragOver
+          ? "border-black bg-[#ffe44d]"
+          : "border-black hover:bg-[#f4f4f4]"
+      } ${disabled ? "opacity-50 pointer-events-none" : ""}`}>
       <input
-        ref={inputRef}
+        ref={fileInputRef}
         type="file"
         accept="image/*"
         multiple
         className="hidden"
-        onChange={(e) => addFromInput(e.target.files)}
-        disabled={disabled}
+        onChange={handleFileSelect}
       />
+      <svg
+        className="w-10 h-10 mx-auto mb-3 text-black"
+        fill="none"
+        viewBox="0 0 24 24"
+        stroke="currentColor">
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={1.5}
+          d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
+        />
+      </svg>
+      <p className="text-black text-sm font-bold uppercase tracking-[0.06em]">
+        Drop images here or click to browse
+      </p>
+      <p className="text-xs text-black mt-1">JPG, PNG, WebP up to 10MB</p>
+    </div>
+  );
+}
 
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-        <div>
-          <p className="text-2xl text-[#edf9f1]">Drop as many leaf images</p>
+function StatusBadge({ status }: { status: QueueStatus }) {
+  const styles = {
+    queued: "bg-[#fff] text-black border border-black",
+    processing: "bg-[#ffe44d] text-black border border-black",
+    done: "bg-[#98ff5e] text-black border border-black",
+    failed: "bg-[#ff7d66] text-black border border-black",
+  };
+  return (
+    <span
+      className={`px-2 py-0.5 rounded-full text-[10px] uppercase tracking-wider ${styles[status]}`}>
+      {status}
+    </span>
+  );
+}
+
+function QueueCard({
+  item,
+  index,
+  active,
+  onRemove,
+  onRetry,
+}: {
+  item: QueueItem;
+  index: number;
+  active: boolean;
+  onRemove: (id: string) => void;
+  onRetry: (item: QueueItem) => void;
+}) {
+  return (
+    <div
+      className={`flex items-center justify-between p-3 border-2 border-black bg-white ${
+        active ? "shadow-[6px_6px_0_0_#000]" : ""
+      }`}>
+      <div className="flex items-center gap-3 flex-1 min-w-0">
+        <img
+          src={item.previewUrl}
+          alt={item.file.name}
+          className="w-14 h-14 object-cover border-2 border-black bg-[#efefef]"
+        />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-xs text-black font-bold">#{index + 1}</span>
+            <StatusBadge status={item.status} />
+          </div>
+          <p className="text-black text-sm font-semibold truncate">
+            {item.file.name}
+          </p>
+          {item.result && (
+            <p className="text-xs text-black mt-1 uppercase tracking-[0.05em]">
+              {formatLabel(item.result.label)} (
+              {Math.round(item.result.confidence * 100)}%)
+            </p>
+          )}
+          {item.error && (
+            <p className="text-xs text-black mt-1 bg-[#ff7d66] inline-block px-2 py-0.5 border border-black">
+              {item.error}
+            </p>
+          )}
         </div>
+      </div>
+      <div className="flex items-center gap-2 ml-3">
+        {item.status === "failed" && (
+          <button
+            onClick={() => onRetry(item)}
+            className="brutal-btn px-3 py-1.5 text-xs bg-[#ffe44d]">
+            Retry
+          </button>
+        )}
         <button
-          type="button"
-          disabled={disabled}
-          className="px-4 py-3 rounded-xl bg-[#48dc82] text-[#0a0f0d] text-xs font-bold uppercase tracking-[0.12em] hover:brightness-95 transition disabled:opacity-60"
-          onClick={() => inputRef.current?.click()}>
-          Add Images
+          onClick={() => onRemove(item.id)}
+          className="brutal-btn px-3 py-1.5 text-xs bg-[#ff7d66]">
+          Remove
         </button>
       </div>
     </div>
   );
 }
 
-function AuthForm({ onAuth, error }: { onAuth: () => void; error: string }) {
-  const [isLogin, setIsLogin] = useState(true);
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [name, setName] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState("");
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    setErr("");
-    try {
-      if (isLogin) {
-        await login(email, password);
-      } else {
-        await register(email, password, name);
-      }
-      onAuth();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : "Authentication failed");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="p-7 bg-[#111916] border border-[rgba(72,220,130,0.15)] rounded-xl">
-      <h2 className="font-['Playfair_Display'] text-xl mb-1">
-        {isLogin ? "Sign In" : "Create Account"}
-      </h2>
-      <p className="text-sm text-[#8ba896] mb-5">
-        {isLogin
-          ? "Sign in to save your diagnosis history"
-          : "Register to save your predictions"}
-      </p>
-
-      <form onSubmit={handleSubmit} className="space-y-3">
-        {!isLogin && (
-          <input
-            type="text"
-            placeholder="Your name"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            className="w-full p-3 bg-[#1a2622] border border-[rgba(72,220,130,0.15)] rounded-md text-[#e8f5ec] placeholder-[#4d665a]"
-            required
-          />
-        )}
-        <input
-          type="email"
-          placeholder="Email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          className="w-full p-3 bg-[#1a2622] border border-[rgba(72,220,130,0.15)] rounded-md text-[#e8f5ec] placeholder-[#4d665a]"
-          required
-        />
-        <input
-          type="password"
-          placeholder="Password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          className="w-full p-3 bg-[#1a2622] border border-[rgba(72,220,130,0.15)] rounded-md text-[#e8f5ec] placeholder-[#4d665a]"
-          required
-        />
-        {(err || error) && (
-          <p className="p-2 bg-[rgba(248,113,113,0.1)] rounded text-sm text-[#f87171]">
-            {err || error}
-          </p>
-        )}
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full py-3 bg-[#48dc82] text-[#0a0f0d] rounded-md font-semibold uppercase tracking-wider text-sm hover:opacity-90 disabled:opacity-50">
-          {loading ? "..." : isLogin ? "Sign In" : "Register"}
-        </button>
-      </form>
-
-      <p className="text-center text-xs text-[#4d665a] mt-4">
-        {isLogin ? "Don't have an account? " : "Already have an account? "}
-        <button
-          type="button"
-          onClick={() => setIsLogin(!isLogin)}
-          className="text-[#48dc82] underline">
-          {isLogin ? "Register" : "Sign In"}
-        </button>
-      </p>
-    </div>
-  );
-}
-
-function HistoryItemComponent({
+function HistoryItemCard({
   item,
   onDelete,
 }: {
@@ -408,33 +195,126 @@ function HistoryItemComponent({
   onDelete: (id: number) => void;
 }) {
   return (
-    <div className="flex items-center gap-3 p-3 bg-[#1a2622] rounded-md border border-[rgba(72,220,130,0.12)]">
+    <div className="flex items-center justify-between p-3 bg-white border-2 border-black">
       <div className="flex-1 min-w-0">
-        <div className="text-sm font-medium truncate">
-          {formatLabel(item.label)}
-        </div>
-        <div className="text-xs text-[#4d665a]">
+        <p className="text-black text-sm font-semibold truncate">
+          {item.image_name}
+        </p>
+        <p className="text-xs text-black">
+          {formatLabel(item.label)} · {Math.round(item.confidence * 100)}% ·{" "}
           {new Date(item.created_at).toLocaleDateString()}
-        </div>
+        </p>
       </div>
-      <span className="text-sm font-semibold text-[#48dc82]">
-        {(item.confidence * 100).toFixed(0)}%
-      </span>
       <button
-        type="button"
-        className="w-6 h-6 bg-transparent border border-[rgba(72,220,130,0.15)] rounded text-[#4d665a] text-lg hover:border-[#f87171] hover:text-[#f87171]"
-        onClick={() => onDelete(item.id)}>
-        x
+        onClick={() => onDelete(item.id)}
+        className="ml-2 px-2 py-1 text-xs text-black border-2 border-black bg-[#ff7d66]">
+        Delete
       </button>
     </div>
+  );
+}
+
+function AuthForm({
+  onAuth,
+  error: propError,
+}: {
+  onAuth: () => void;
+  error?: string;
+}) {
+  const [isLogin, setIsLogin] = useState(true);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+    setLoading(true);
+    try {
+      if (isLogin) {
+        await login(email, password);
+      } else {
+        await register(email, password, name);
+      }
+      onAuth();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Auth failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="max-w-sm mx-auto space-y-4">
+      <h2 className="text-xl font-black text-black uppercase tracking-[0.04em]">
+        {isLogin ? "Welcome back" : "Create account"}
+      </h2>
+      <p className="text-sm text-black">
+        {isLogin
+          ? "Sign in to access your predictions"
+          : "Sign up to save your predictions"}
+      </p>
+
+      {!isLogin && (
+        <input
+          type="text"
+          placeholder="Name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          required
+          className="input-field"
+        />
+      )}
+      <input
+        type="email"
+        placeholder="Email"
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+        required
+        className="input-field"
+      />
+      <input
+        type="password"
+        placeholder="Password"
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+        required
+        className="input-field"
+      />
+
+      {(error || propError) && (
+        <p className="text-sm text-black border border-black bg-[#ff7d66] px-2 py-1 inline-block">
+          {error || propError}
+        </p>
+      )}
+
+      <button
+        type="submit"
+        disabled={loading}
+        className="brutal-btn w-full bg-[#ffe44d]">
+        {loading ? "Loading..." : isLogin ? "Sign in" : "Create account"}
+      </button>
+
+      <p className="text-center text-sm text-black">
+        {isLogin ? "Don't have an account? " : "Already have an account? "}
+        <button
+          type="button"
+          onClick={() => setIsLogin(!isLogin)}
+          className="font-bold underline">
+          {isLogin ? "Sign up" : "Sign in"}
+        </button>
+      </p>
+    </form>
   );
 }
 
 export default function App() {
   const [user, setUser] = useState<User | null>(getUser());
   const [queue, setQueue] = useState<QueueItem[]>([]);
-  const [isBatchRunning, setIsBatchRunning] = useState(false);
-  const [activeQueueId, setActiveQueueId] = useState<string | null>(null);
+  const [isRunning, setIsRunning] = useState(false);
+  const [activeId, setActiveId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [backendStatus, setBackendStatus] = useState<
     "checking" | "online" | "offline"
@@ -444,26 +324,17 @@ export default function App() {
   const previewsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
-    let mounted = true;
-    let interval: ReturnType<typeof setInterval>;
-
     const checkBackend = async () => {
       try {
         const data = await getHealthStatus();
-        if (mounted)
-          setBackendStatus(data.status === "ok" ? "online" : "offline");
+        setBackendStatus(data.status === "ok" ? "online" : "offline");
       } catch {
-        if (mounted) setBackendStatus("offline");
+        setBackendStatus("offline");
       }
     };
-
     checkBackend();
-    interval = setInterval(checkBackend, 15000);
-
-    return () => {
-      mounted = false;
-      clearInterval(interval);
-    };
+    const interval = setInterval(checkBackend, 15000);
+    return () => clearInterval(interval);
   }, []);
 
   useEffect(() => {
@@ -474,47 +345,38 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (user && view === "history") {
-      void loadHistory();
-    }
+    if (user && view === "history") loadHistory();
   }, [user, view]);
 
-  const revokePreview = (url: string) => {
-    if (previewsRef.current.has(url)) {
-      URL.revokeObjectURL(url);
-      previewsRef.current.delete(url);
-    }
-  };
-
   const addFiles = (files: File[]) => {
-    const next = files.map((file) => {
-      const previewUrl = URL.createObjectURL(file);
-      previewsRef.current.add(previewUrl);
-      return {
-        id: makeQueueId(),
-        file,
-        previewUrl,
-        status: "queued" as QueueStatus,
-      };
-    });
-
-    setQueue((prev) => [...prev, ...next]);
+    const items = files.map((file) => ({
+      id: makeQueueId(),
+      file,
+      previewUrl: URL.createObjectURL(file),
+      status: "queued" as QueueStatus,
+    }));
+    items.forEach((item) => previewsRef.current.add(item.previewUrl));
+    setQueue((prev) => [...prev, ...items]);
     setError("");
   };
 
   const removeQueueItem = (id: string) => {
-    setQueue((prev) => {
-      const target = prev.find((item) => item.id === id);
-      if (target) revokePreview(target.previewUrl);
-      return prev.filter((item) => item.id !== id);
-    });
-    if (activeQueueId === id) setActiveQueueId(null);
+    const item = queue.find((i) => i.id === id);
+    if (item) {
+      URL.revokeObjectURL(item.previewUrl);
+      previewsRef.current.delete(item.previewUrl);
+    }
+    setQueue((prev) => prev.filter((i) => i.id !== id));
+    if (activeId === id) setActiveId(null);
   };
 
   const clearQueue = () => {
-    queue.forEach((item) => revokePreview(item.previewUrl));
+    queue.forEach((item) => {
+      URL.revokeObjectURL(item.previewUrl);
+      previewsRef.current.delete(item.previewUrl);
+    });
     setQueue([]);
-    setActiveQueueId(null);
+    setActiveId(null);
     setError("");
   };
 
@@ -524,75 +386,57 @@ export default function App() {
     );
   };
 
-  const runSinglePrediction = async (item: QueueItem) => {
-    if (isBatchRunning) return;
+  const runPrediction = async (item: QueueItem) => {
+    if (isRunning) return;
     setError("");
-    setActiveQueueId(item.id);
+    setActiveId(item.id);
     updateQueueItem(item.id, { status: "processing", error: undefined });
     try {
-      const [prediction] = await predict([item.file]);
-      updateQueueItem(item.id, {
-        status: "done",
-        result: prediction,
-        error: undefined,
-      });
-      if (user) {
-        await loadHistory();
-      }
+      const [result] = await predict([item.file]);
+      updateQueueItem(item.id, { status: "done", result });
+      if (user) loadHistory();
     } catch (err) {
       updateQueueItem(item.id, {
         status: "failed",
-        error: err instanceof Error ? err.message : "Prediction failed",
+        error: err instanceof Error ? err.message : "Failed",
       });
     } finally {
-      setActiveQueueId(null);
+      setActiveId(null);
     }
   };
 
-  const runBatchPredictions = async () => {
-    const queueSnapshot = queue;
-    if (queueSnapshot.length === 0) {
-      setError("Add at least one image first");
+  const runAllPredictions = async () => {
+    if (queue.length === 0) {
+      setError("Add images first");
       return;
     }
-
-    setIsBatchRunning(true);
+    setIsRunning(true);
     setError("");
-
-    for (const item of queueSnapshot) {
-      setActiveQueueId(item.id);
+    for (const item of queue) {
+      setActiveId(item.id);
       updateQueueItem(item.id, {
         status: "processing",
-        error: undefined,
         result: undefined,
+        error: undefined,
       });
-
       try {
-        const [prediction] = await predict([item.file]);
-        updateQueueItem(item.id, {
-          status: "done",
-          result: prediction,
-          error: undefined,
-        });
+        const [result] = await predict([item.file]);
+        updateQueueItem(item.id, { status: "done", result });
       } catch (err) {
         updateQueueItem(item.id, {
           status: "failed",
-          error: err instanceof Error ? err.message : "Prediction failed",
+          error: err instanceof Error ? err.message : "Failed",
         });
       }
     }
-
-    setActiveQueueId(null);
-    setIsBatchRunning(false);
-    if (user) {
-      await loadHistory();
-    }
+    setActiveId(null);
+    setIsRunning(false);
+    if (user) loadHistory();
   };
 
   const loadHistory = async () => {
     try {
-      const hist = await getHistory();
-      setHistory(hist);
+      setHistory(await getHistory());
     } catch {
       console.error("Failed to load history");
     }
@@ -603,12 +447,6 @@ export default function App() {
     await loadHistory();
   };
 
-  const handleOpenChatGpt = (item: QueueItem) => {
-    if (!item.result) return;
-    const chatGptUrl = buildChatGptUrl(item.result, item.file.name);
-    window.open(chatGptUrl, "_blank", "noopener,noreferrer");
-  };
-
   const handleLogout = () => {
     logout();
     setUser(null);
@@ -616,121 +454,98 @@ export default function App() {
     setView("upload");
   };
 
-  const completed = queue.filter((item) => item.status === "done").length;
-  const failed = queue.filter((item) => item.status === "failed").length;
+  const queued = queue.filter((i) => i.status === "queued").length;
+  const done = queue.filter((i) => i.status === "done").length;
+  const failed = queue.filter((i) => i.status === "failed").length;
 
   return (
-    <main className="min-h-screen px-3 py-4 md:px-6 md:py-6">
-      <div className="mx-auto max-w-[1280px] grid grid-cols-1 lg:grid-cols-[280px_minmax(0,1fr)] gap-4 md:gap-5">
-        <aside className="h-fit lg:sticky lg:top-4 p-4 md:p-5 rounded-2xl border border-[rgba(72,220,130,0.18)] bg-[radial-gradient(circle_at_top,rgba(72,220,130,0.14),rgba(17,25,22,0.92)_45%)] shadow-[0_20px_40px_rgba(0,0,0,0.25)]">
-          <div className="flex items-center gap-3 pb-4 border-b border-[rgba(72,220,130,0.16)]">
-            <div className="w-8 h-8 border-3 border-[#48dc82] rounded-lg flex items-center justify-center relative overflow-hidden">
-              <div className="w-2 h-2 bg-[#48dc82] rounded-full shadow-[0_0_12px_rgba(72,220,130,0.6)] animate-pulse" />
-            </div>
-            <div className="flex items-center justify-between w-full">
-              <h1 className="text-2xl leading-none text-[#48dc82]">
+    <main className="min-h-screen px-4 py-6 md:px-6 brutal-canvas">
+      <div className="mx-auto max-w-5xl grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-5">
+        {/* Sidebar */}
+        <aside className="lg:sticky lg:top-4 h-fit p-5 brutal-panel">
+          <div className="flex items-center gap-3 pb-4 border-b-2 border-black">
+            <img
+              src="https://emojicdn.elk.sh/🌱"
+              defaultValue={"🌱"}
+              className="w-8 h-8"
+            />
+            <div>
+              <h1 className="text-lg font-black text-black uppercase tracking-[0.06em]">
                 GreenGuard
               </h1>
               <div className="flex items-center gap-2">
                 <div
-                  className={`w-2 h-2 rounded-full ${
-                    backendStatus === "online"
-                      ? "bg-[#48dc82] shadow-[0_0_8px_rgba(72,220,130,0.6)]"
-                      : backendStatus === "offline"
-                        ? "bg-[#f87171] shadow-[0_0_8px_rgba(248,113,113,0.45)]"
-                        : "bg-[#fbbf24]"
-                  } ${backendStatus === "online" ? "animate-pulse" : ""}`}
+                  className={`w-2.5 h-2.5 border border-black ${backendStatus === "online" ? "bg-[#98ff5e]" : backendStatus === "offline" ? "bg-[#ff7d66]" : "bg-[#ffe44d]"}`}
                 />
-                <span className="text-xs uppercase tracking-[0.1em] text-[#edf9f1]">
+                <span className="text-xs text-black uppercase tracking-wider font-semibold">
                   {backendStatus}
                 </span>
               </div>
             </div>
           </div>
 
-          <nav className="mt-4 space-y-2">
+          <nav className="mt-4 space-y-1">
             <button
-              type="button"
-              className={`w-full text-left px-3 py-2 rounded-lg text-xs uppercase tracking-[0.12em] transition ${
-                view === "upload"
-                  ? "bg-[rgba(72,220,130,0.14)] text-[#48dc82]"
-                  : "text-[#8ba896] hover:text-[#edf9f1] hover:bg-[rgba(72,220,130,0.07)]"
-              }`}
-              onClick={() => setView("upload")}>
-              Diagnose Flow
+              onClick={() => setView("upload")}
+              className={`w-full text-left px-3 py-2 text-sm transition border-2 border-black font-bold uppercase ${view === "upload" ? "bg-[#ffe44d] text-black" : "bg-white text-black"}`}>
+              Diagnose
             </button>
             {user && (
               <button
-                type="button"
-                className={`w-full text-left px-3 py-2 rounded-lg text-xs uppercase tracking-[0.12em] transition ${
-                  view === "history"
-                    ? "bg-[rgba(72,220,130,0.14)] text-[#48dc82]"
-                    : "text-[#8ba896] hover:text-[#edf9f1] hover:bg-[rgba(72,220,130,0.07)]"
-                }`}
-                onClick={() => setView("history")}>
+                onClick={() => setView("history")}
+                className={`w-full text-left px-3 py-2 text-sm transition border-2 border-black font-bold uppercase ${view === "history" ? "bg-[#ffe44d] text-black" : "bg-white text-black"}`}>
                 History
               </button>
             )}
             {!user && (
               <button
-                type="button"
-                className={`w-full text-left px-3 py-2 rounded-lg text-xs uppercase tracking-[0.12em] transition ${
-                  view === "auth"
-                    ? "bg-[rgba(72,220,130,0.14)] text-[#48dc82]"
-                    : "text-[#8ba896] hover:text-[#edf9f1] hover:bg-[rgba(72,220,130,0.07)]"
-                }`}
-                onClick={() => setView("auth")}>
+                onClick={() => setView("auth")}
+                className={`w-full text-left px-3 py-2 text-sm transition border-2 border-black font-bold uppercase ${view === "auth" ? "bg-[#ffe44d] text-black" : "bg-white text-black"}`}>
                 Sign In
               </button>
             )}
           </nav>
 
           <div className="mt-4 grid grid-cols-3 gap-2">
-            <div className="p-2 rounded-lg bg-[#0d1512] border border-[rgba(72,220,130,0.12)]">
-              <p className="text-[10px] uppercase tracking-[0.12em] text-[#7e9a8a]">
-                Queued
-              </p>
-              <p className="font-bold text-[#edf9f1] mt-1">{queue.length}</p>
+            <div className="p-2 border-2 border-black text-center bg-white">
+              <p className="text-xs text-black font-bold">{queued}</p>
+              <p className="text-[10px] uppercase text-black">Queued</p>
             </div>
-            <div className="p-2 rounded-lg bg-[#0d1512] border border-[rgba(72,220,130,0.12)]">
-              <p className="text-[10px] uppercase tracking-[0.12em] text-[#7e9a8a]">
-                Done
-              </p>
-              <p className="font-bold text-[#48dc82] mt-1">{completed}</p>
+            <div className="p-2 border-2 border-black text-center bg-[#98ff5e]">
+              <p className="text-xs text-black font-bold">{done}</p>
+              <p className="text-[10px] uppercase text-black">Done</p>
             </div>
-            <div className="p-2 rounded-lg bg-[#0d1512] border border-[rgba(72,220,130,0.12)]">
-              <p className="text-[10px] uppercase tracking-[0.12em] text-[#7e9a8a]">
-                Failed
-              </p>
-              <p className="font-bold text-[#fca5a5] mt-1">{failed}</p>
+            <div className="p-2 border-2 border-black text-center bg-[#ff7d66]">
+              <p className="text-xs text-black font-bold">{failed}</p>
+              <p className="text-[10px] uppercase text-black">Failed</p>
             </div>
           </div>
 
-          <div className="mt-4 pt-4 border-t border-[rgba(72,220,130,0.16)]">
+          <div className="mt-4 pt-4">
             {user ? (
-              <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-xs text-[#8ba896]">Logged in as</p>
-                  <p className="text-sm text-[#edf9f1]">{user.name}</p>
+                  <p className="text-xs text-black">Signed in as</p>
+                  <p className="text-sm text-black font-semibold">
+                    {user.name}
+                  </p>
                 </div>
                 <button
-                  type="button"
-                  className="px-2 py-1 rounded-md border border-[rgba(72,220,130,0.25)] text-xs text-[#8ba896] hover:text-[#edf9f1]"
-                  onClick={handleLogout}>
+                  onClick={handleLogout}
+                  className="brutal-btn px-3 py-1.5 text-xs bg-white">
                   Logout
                 </button>
               </div>
             ) : (
-              <p className="text-xs text-[#8ba896]">
-                Sign in to save every prediction in history.
-              </p>
+              <p className="text-xs text-black">Sign in to save predictions</p>
             )}
           </div>
         </aside>
 
-        <section className="min-w-0 rounded-2xl border border-[rgba(72,220,130,0.16)] bg-[linear-gradient(180deg,rgba(17,25,22,0.92),rgba(10,15,13,0.96))] p-4 md:p-5 shadow-[0_20px_40px_rgba(0,0,0,0.25)]">
+        {/* Main Content */}
+        <section className="min-w-0 border-2 border-black bg-white p-5 shadow-[8px_8px_0_0_#000]">
           {view === "auth" && !user && (
-            <div className="max-w-md animate-fade-in">
+            <div className="animate-fade-in">
               <AuthForm
                 onAuth={() => {
                   setUser(getUser());
@@ -743,84 +558,76 @@ export default function App() {
 
           {view === "upload" && (
             <div className="space-y-4 animate-fade-in">
-              <UploadDropzone disabled={isBatchRunning} onFiles={addFiles} />
+              <UploadDropzone disabled={isRunning} onFiles={addFiles} />
 
-              <div className="flex flex-wrap gap-2">
+              <div className="flex gap-2">
                 <button
-                  type="button"
-                  onClick={runBatchPredictions}
-                  disabled={isBatchRunning || queue.length === 0}
-                  className="px-4 py-3 rounded-xl bg-[#48dc82] text-[#0a0f0d] text-xs font-bold uppercase tracking-[0.12em] hover:brightness-95 disabled:opacity-50">
-                  {isBatchRunning
-                    ? "Running Sequence..."
-                    : "Predict All One by One"}
+                  onClick={runAllPredictions}
+                  disabled={isRunning || queue.length === 0}
+                  className="brutal-btn bg-[#ffe44d]">
+                  {isRunning
+                    ? "Diagnosing..."
+                    : `Diagnose All One By One (${queue.length})`}
                 </button>
                 <button
-                  type="button"
                   onClick={clearQueue}
-                  disabled={isBatchRunning || queue.length === 0}
-                  className="px-4 py-3 rounded-xl border border-[rgba(72,220,130,0.25)] text-xs font-semibold uppercase tracking-[0.1em] text-[#8ba896] hover:text-[#edf9f1] disabled:opacity-50">
+                  disabled={isRunning || queue.length === 0}
+                  className="brutal-btn bg-white">
                   Clear Queue
                 </button>
               </div>
 
               {error && (
-                <p className="p-3 bg-[rgba(248,113,113,0.1)] border border-[rgba(248,113,113,0.3)] rounded-md text-sm text-[#f87171]">
+                <p className="text-sm text-black bg-[#ff7d66] border border-black px-3 py-2 inline-block">
                   {error}
                 </p>
               )}
 
               {queue.length === 0 ? (
-                <div className="rounded-2xl border border-[rgba(72,220,130,0.14)] bg-[#0d1512] p-8 text-center">
-                  <p className="text-[#8ba896]">
-                    Your flow queue is empty. Add leaf images to begin.
-                  </p>
+                <div className="py-12 text-center text-black border-2 border-dashed border-black bg-[#f4f4f4]">
+                  No images added. Upload leaf images to diagnose.
                 </div>
               ) : (
-                <div className="space-y-3">
+                <div className="space-y-2">
                   {queue.map((item, index) => (
-                    <QueueFlowCard
+                    <QueueCard
                       key={item.id}
                       item={item}
                       index={index}
-                      active={activeQueueId === item.id}
-                      running={isBatchRunning}
+                      active={activeId === item.id}
                       onRemove={removeQueueItem}
-                      onRetry={(failedItem) => {
-                        void runSinglePrediction(failedItem);
-                      }}
-                      onOpenChatGpt={handleOpenChatGpt}
+                      onRetry={runPrediction}
                     />
                   ))}
                 </div>
               )}
 
               {!user && (
-                <section className="text-center py-4 text-[#8ba896] text-sm">
+                <p className="text-center text-sm text-black">
                   <button
                     onClick={() => setView("auth")}
-                    className="text-[#48dc82] underline">
+                    className="font-bold underline">
                     Sign in
                   </button>{" "}
-                  to save your predictions
-                </section>
+                  to save predictions
+                </p>
               )}
             </div>
           )}
 
           {view === "history" && user && (
-            <section className="p-5 bg-[#111916] border border-[rgba(72,220,130,0.15)] rounded-xl animate-fade-in">
-              <h3 className="text-xs font-medium uppercase tracking-wider text-[#8ba896] mb-4">
+            <div className="animate-fade-in">
+              <h2 className="text-sm font-bold text-black uppercase tracking-wider mb-4">
                 Prediction History
-              </h3>
+              </h2>
               {history.length === 0 ? (
-                <p className="text-center py-8 text-[#4d665a] text-sm">
-                  No predictions yet. Upload an image to get started.
+                <p className="py-8 text-center text-black">
+                  No predictions yet
                 </p>
               ) : (
-                <div className="space-y-2 max-h-[560px] overflow-y-auto pr-1">
+                <div className="space-y-2 max-h-[500px] overflow-y-auto pr-1">
                   {history.map((item) => (
-                    <HistoryItemComponent
+                    <HistoryItemCard
                       key={item.id}
                       item={item}
                       onDelete={handleDeleteHistory}
@@ -828,18 +635,11 @@ export default function App() {
                   ))}
                 </div>
               )}
-            </section>
+            </div>
           )}
 
-          <footer className="pt-5 mt-5 border-t border-[rgba(72,220,130,0.15)] text-center text-xs text-[#4d665a]">
-            GreenGuard · {new Date().getFullYear()} ·{" "}
-            <a
-              href="https://github.com/thetanav/greenguard"
-              target="_blank"
-              rel="noopener"
-              className="text-[#48dc82] no-underline hover:underline">
-              View on GitHub
-            </a>
+          <footer className="mt-6 text-center text-xs text-black">
+            GreenGuard © {new Date().getFullYear()}
           </footer>
         </section>
       </div>
