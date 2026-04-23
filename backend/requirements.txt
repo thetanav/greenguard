@@ -4,7 +4,7 @@ python-multipart
 pydantic-settings
 numpy
 Pillow
-tensorflow
+tensorflow-cpu==2.16.1
 sqlmodel
 pyjwt
 passlib[bcrypt]
