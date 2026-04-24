@@ -1,5 +1,5 @@
-const API_URL = import.meta.env.VITE_API_URL || "";
-
+const API_URL = import.meta.env.VITE_API_URL;
+console.log("Using API URL:", API_URL);
 function buildUrl(path: string): string {
   return `${API_URL}${path}`;
 }
@@ -15,7 +15,7 @@ async function parseErrorMessage(
 function toNetworkError(err: unknown): Error {
   if (err instanceof TypeError) {
     return new Error(
-      "Network/certificate error while contacting backend. If you use HTTPS with a self-signed cert, run frontend through Vite proxy or trust the backend certificate.",
+      "Network/certificate error while contacting backend. Check your VITE_API_URL value and backend certificate.",
     );
   }
   return err instanceof Error ? err : new Error("Request failed");
